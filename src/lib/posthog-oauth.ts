@@ -45,7 +45,7 @@ export class LoginError extends Error {
     }
 }
 
-const oauthHost = (env: AppEnv) => env.POSTHOG_OAUTH_HOST || 'https://oauth.posthog.com'
+const oauthHost = (env: AppEnv) => env.POSTHOG_OAUTH_HOST || 'https://us.posthog.com'
 const redirectUri = (env: AppEnv) => `${env.PUBLIC_URL}/auth/posthog/callback`
 export const clientMetadataUrl = (env: AppEnv) => `${env.PUBLIC_URL}/oauth/client-metadata.json`
 
@@ -136,12 +136,11 @@ interface Claims {
     iss?: string
 }
 
-/** The region-agnostic host may hand back an ID token issued by the user's regional instance. */
+/** We only sign in through US Cloud, so the issuer must be exactly the host we sent the user to. */
 function trustedIssuer(env: AppEnv, iss: string | undefined): boolean {
     try {
         const url = new URL(iss ?? '')
-        if (url.protocol !== 'https:') return false
-        return url.hostname === new URL(oauthHost(env)).hostname || /^(us|eu|oauth)\.posthog\.com$/.test(url.hostname)
+        return url.protocol === 'https:' && url.origin === new URL(oauthHost(env)).origin
     } catch {
         return false
     }

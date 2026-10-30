@@ -11,7 +11,7 @@ export interface AppEnv {
     ALLOWED_EMAIL_DOMAIN: string
     DEV_LOGIN: string
     SESSION_SECRET: string
-    /** PostHog OAuth server; defaults to the region-agnostic https://oauth.posthog.com. */
+    /** PostHog OAuth server and the only ID-token issuer we accept; defaults to US Cloud, https://us.posthog.com. */
     POSTHOG_OAUTH_HOST: string
     /** Comma-separated https hosts MCP clients may redirect to, besides loopback. Default: claude.ai,claude.com */
     MCP_REDIRECT_HOSTS: string

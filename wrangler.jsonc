@@ -19,8 +19,8 @@
     // behind a CSP sandbox, which is safe because content always runs with an opaque origin.
     "CONTENT_URL": "",
     "ALLOWED_EMAIL_DOMAIN": "posthog.com",
-    // "Sign in with PostHog". Region-agnostic: routes US and EU accounts.
-    "POSTHOG_OAUTH_HOST": "https://oauth.posthog.com",
+    // "Sign in with PostHog". US Cloud only: ID tokens are accepted solely from this issuer.
+    "POSTHOG_OAUTH_HOST": "https://us.posthog.com",
     // https hosts MCP clients may receive tokens at, besides loopback (Claude Code etc.). See src/lib/policy.ts.
     "MCP_REDIRECT_HOSTS": "claude.ai,claude.com",
     // Only honoured when PUBLIC_URL is localhost, so it can't be switched on in production.

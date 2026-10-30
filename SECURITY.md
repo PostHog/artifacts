@@ -23,7 +23,7 @@ This document covers artifacts.posthog.com: one Cloudflare Worker that does thre
 
 ### 1. Identity
 - **Who can sign in.** "Sign in with PostHog" uses OIDC with PKCE as a public client. Access requires `email_verified === true` *and* an email exactly `@posthog.com`. The verified check is required because anyone can sign up to PostHog with an unverified address.
-- **ID-token checks.** Each ID token is bound to the issuer (`us`/`eu`/`oauth.posthog.com`), the audience (our `client_id`), the nonce and the expiry. The signature isn't checked: the token comes straight from the token endpoint over TLS, which OIDC Core §3.1.3.7 allows in place of a signature check.
+- **ID-token checks.** Each ID token is bound to the issuer (exactly `https://us.posthog.com`; EU Cloud and the region-agnostic `oauth.posthog.com` are not accepted), the audience (our `client_id`), the nonce and the expiry. The signature isn't checked: the token comes straight from the token endpoint over TLS, which OIDC Core §3.1.3.7 allows in place of a signature check.
 - **Login-flow state.** State, the PKCE verifier and the nonce live in a signed, 10-minute `__Host-` cookie that is used once. After login, `next` is resolved against `PUBLIC_URL` and must stay on our origin.
 - **Sessions.** A session is a signed 7-day `__Host-` cookie (HttpOnly, Secure, SameSite=Lax). Sign-out is a POST request.
 - **Token purposes.** Every signed token includes its purpose (`session` / `frame` / `login`) in the MAC. That stops a public iframe grant being replayed as a session. The OAuth library's consent cookie gets a separately derived key.
