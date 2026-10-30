@@ -58,7 +58,7 @@ export function clientMetadata(env: AppEnv) {
         // PostHog rejects client names starting with "posthog".
         client_name: 'Artifacts by PostHog',
         client_uri: env.PUBLIC_URL,
-        logo_uri: `${env.PUBLIC_URL}/favicon.svg`,
+        logo_uri: `${env.PUBLIC_URL}/logo-512.png`,
         redirect_uris: [redirectUri(env)],
         grant_types: ['authorization_code'],
         response_types: ['code'],
