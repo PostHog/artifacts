@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   // Must match the Worker name in the Cloudflare dashboard for Workers Builds (deploy on push to main).
-  "name": "posthog-artifacts",
+  "name": "artifacts",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   // global_fetch_strictly_public lets the OAuth provider fetch Client ID Metadata Documents safely.
@@ -26,11 +26,11 @@
     // Only honoured when PUBLIC_URL is localhost, so it can't be switched on in production.
     "DEV_LOGIN": "false"
   },
-  // No resource IDs: Wrangler provisions these on the first deploy and reuses them afterwards.
+  // Provisioned by the first deploy, then pinned here so a Worker rename can't silently provision empty replacements.
   // The schema is applied by the Worker itself (src/lib/migrate.ts), so deploys need no migration step.
-  "d1_databases": [{ "binding": "DB" }],
-  "r2_buckets": [{ "binding": "BUCKET" }],
-  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
+  "d1_databases": [{ "binding": "DB", "database_name": "artifacts-db", "database_id": "8ee901fa-330a-4c71-aada-607c87598132" }],
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "artifacts-bucket" }],
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "dfb66e5006524488bc25622dfa110781" }],
   // Abuse limits (per Cloudflare location). namespace_id is any account-unique integer string.
   "ratelimits": [
     { "name": "PUBLISH_LIMITER", "namespace_id": "4201", "simple": { "limit": 30, "period": 60 } },

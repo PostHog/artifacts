@@ -68,15 +68,13 @@ pnpm typecheck
 
 Nothing needs to be created by hand.
 
-- **Resources:**
-  - The D1, R2 and KV bindings in `wrangler.jsonc` have no IDs.
-  - The first `wrangler deploy` provisions them, and later deploys reuse them.
+- **Resources:** the D1 database (`artifacts-db`), R2 bucket (`artifacts-bucket`) and KV namespace were provisioned by the first `wrangler deploy` and are pinned by ID in `wrangler.jsonc`. To stand up a fresh copy elsewhere, drop the IDs and names and Wrangler will provision new ones.
 - **Schema:** the Worker applies `migrations/*.sql` itself on first use (`src/lib/migrate.ts`). Deploys are a plain `wrangler deploy` with no migration step. To change the schema, add a new numbered `.sql` file and register it in `migrate.ts`. Never edit one that has already shipped.
 
 ### Going live
 
 1. **Connect the repo.** In the Cloudflare dashboard go to Workers & Pages → Create → Import a repository. Pick this GitHub repo with production branch `main`.
-   - Worker name: `posthog-artifacts`. It must match `name` in `wrangler.jsonc`.
+   - Worker name: `artifacts`. It must match `name` in `wrangler.jsonc`.
    - Build command: leave empty, or use `pnpm typecheck`.
    - Deploy command: the default `npx wrangler deploy`.
    - Node and pnpm versions come from `.node-version` and `packageManager`.
