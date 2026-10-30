@@ -317,3 +317,9 @@ table.list .num { text-align: right; white-space: nowrap; color: var(--text-mute
     .panel { width: min(340px, calc(100vw - 24px)); }
     table.list .hide-sm { display: none; }
 }
+
+.tight { margin: 4px 0 0; }
+.spaced { margin: 12px 0 0; }
+.hero-actions { margin-bottom: 32px; }
+.card.flush { padding: 0; }
+.bar form { margin: 0; }

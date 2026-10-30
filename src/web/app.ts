@@ -1,10 +1,12 @@
 import { AuthorizationError, CimdFetchError } from '@cloudflare/workers-oauth-provider'
 import { Hono, type Context } from 'hono'
 import type { AppEnv, User } from '../env'
-import { LoginError, beginPostHogLogin, clientMetadata, finishPostHogLogin } from '../lib/posthog-oauth'
-import { clearSessionCookie, getUser, isAllowedEmail, isLocal, safeNext, sessionCookie } from '../lib/session'
+import { deriveSecret } from '../lib/crypto'
+import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/policy'
+import { LoginError, beginPostHogLogin, clientMetadata, finishPostHogLogin, loginErrorMessage } from '../lib/posthog-oauth'
+import { clearSessionCookie, getUser, isAllowedEmail, isLocal, isRevoked, safeNext, serializeCookie, sessionCookie } from '../lib/session'
 import { StoreError, getArtifact, getVersion, isOwner, listArtifacts, listVersions, setVisibility, shareUrl } from '../store'
-import { frameUrl, serveContent } from './content'
+import { contentOrigin, frameUrl, serveContent } from './content'
 import { consentPage, homePage, loginPage, messagePage, viewerPage } from './templates'
 
 type Env = { Bindings: AppEnv; Variables: { user: User | null } }
@@ -17,11 +19,16 @@ app.use('*', async (c, next) => {
     c.set('user', await getUser(c.env, c.req.raw))
     await next()
     c.header('X-Robots-Tag', 'noindex, nofollow')
+    c.header('X-Content-Type-Options', 'nosniff')
+    // Artifact content sets its own sandbox CSP, framing rules and referrer policy.
+    if (c.req.path.startsWith('/c/')) return
     // Never leak share links to other sites, but keep Origin on our own posts.
     c.header('Referrer-Policy', 'same-origin')
-    c.header('X-Content-Type-Options', 'nosniff')
-    // Chrome pages may only be framed by ourselves; artifact content sets its own policy.
-    if (!c.req.path.startsWith('/c/')) c.header('X-Frame-Options', 'DENY')
+    c.header('X-Frame-Options', 'DENY')
+    c.header('Content-Security-Policy', pageCsp(c.env, contentOrigin(c.env)))
+    // Severs window.opener from popups an artifact opens, so they can't navigate this tab (reverse tabnabbing).
+    c.header('Cross-Origin-Opener-Policy', 'same-origin')
+    c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
 })
 
 const notFound = (c: Context<Env>) =>
@@ -36,6 +43,9 @@ const notFound = (c: Context<Env>) =>
     )
 
 const loginRedirect = (c: Context<Env>) => c.redirect(`/login?next=${encodeURIComponent(c.req.path + (new URL(c.req.url).search || ''))}`)
+
+const loginError = (c: Context<Env>, error: LoginError, next = '/') =>
+    c.redirect(`/login?error=${error.code}${next === '/' ? '' : `&next=${encodeURIComponent(next)}`}`)
 
 /** Rejects cross-site form/fetch posts. SameSite=Lax already blocks the cookie; this is defence in depth. */
 const sameOrigin = (c: Context<Env>) => {
@@ -56,9 +66,9 @@ app.get('/', async (c) => {
 const devLoginEnabled = (env: AppEnv) => env.DEV_LOGIN === 'true' && isLocal(env)
 
 app.get('/login', (c) => {
-    const next = safeNext(c.req.query('next'))
+    const next = safeNext(c.env, c.req.query('next'))
     if (c.get('user')) return c.redirect(next)
-    return c.html(loginPage({ next, error: c.req.query('error'), dev: devLoginEnabled(c.env) }))
+    return c.html(loginPage({ next, error: loginErrorMessage(c.req.query('error')), dev: devLoginEnabled(c.env) }))
 })
 
 // Client ID Metadata Document: our client_id *is* this URL, so PostHog fetches it to learn our redirect URI.
@@ -69,9 +79,9 @@ app.get('/oauth/client-metadata.json', (c) => {
 
 app.get('/auth/posthog', async (c) => {
     try {
-        return await beginPostHogLogin(c.env, safeNext(c.req.query('next')))
+        return await beginPostHogLogin(c.env, safeNext(c.env, c.req.query('next')))
     } catch (error) {
-        if (error instanceof LoginError) return c.redirect(`/login?error=${encodeURIComponent(error.message)}`)
+        if (error instanceof LoginError) return loginError(c, error)
         throw error
     }
 })
@@ -80,9 +90,11 @@ app.get('/auth/posthog/callback', async (c) => {
     try {
         const { user, next } = await finishPostHogLogin(c.env, c.req.raw)
         c.header('Set-Cookie', await sessionCookie(c.env, user))
-        return c.redirect(next)
+        // The login state is single-use.
+        c.header('Set-Cookie', serializeCookie(c.env, 'login', '', 0), { append: true })
+        return c.redirect(safeNext(c.env, next))
     } catch (error) {
-        if (error instanceof LoginError) return c.redirect(`/login?error=${encodeURIComponent(error.message)}`)
+        if (error instanceof LoginError) return loginError(c, error)
         throw error
     }
 })
@@ -91,16 +103,16 @@ app.post('/login/dev', async (c) => {
     if (!devLoginEnabled(c.env) || !sameOrigin(c)) return c.notFound()
     const form = await c.req.formData()
     const email = String(form.get('email') ?? '').trim().toLowerCase()
-    const next = safeNext(String(form.get('next') ?? '/'))
-    if (!isAllowedEmail(c.env, email)) {
-        return c.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent(`Use an @${c.env.ALLOWED_EMAIL_DOMAIN} address`)}`)
-    }
+    const next = safeNext(c.env, String(form.get('next') ?? '/'))
+    if (!isAllowedEmail(c.env, email)) return loginError(c, new LoginError('not_allowed'), next)
+    if (await isRevoked(c.env, email)) return loginError(c, new LoginError('revoked'), next)
     const name = String(form.get('name') ?? '').trim() || email.split('@')[0]!
     c.header('Set-Cookie', await sessionCookie(c.env, { email, name }))
     return c.redirect(next)
 })
 
-app.get('/logout', (c) => {
+app.post('/logout', (c) => {
+    if (!sameOrigin(c)) return c.text('Forbidden', 403)
     c.header('Set-Cookie', clearSessionCookie(c.env))
     return c.redirect('/')
 })
@@ -116,7 +128,24 @@ function renderAuthError(c: Context<Env>, error: unknown) {
     throw error
 }
 
-const rememberConsent = (env: AppEnv, user: User) => ({ secret: env.SESSION_SECRET, subject: user.email })
+// The OAuth library signs its own cookies with this; derive it so no key is shared between formats.
+const rememberConsent = async (env: AppEnv, user: User) => ({ secret: await deriveSecret(env.SESSION_SECRET, 'oauth-consent'), subject: user.email })
+
+/** Our own client policy, on top of the library's validation (see lib/policy.ts). */
+function clientPolicyError(c: Context<Env>, request: { clientId: string; redirectUri: string }) {
+    if (isSelfHostedClientId(c.env, request.clientId) || !isAllowedRedirectUri(c.env, request.redirectUri)) {
+        console.warn('mcp authorize refused by client policy', { clientId: request.clientId, redirectHost: URL.parse(request.redirectUri)?.host })
+        return c.html(
+            messagePage({
+                user: c.get('user'),
+                title: "Couldn't connect",
+                message: 'This app isn\'t allowed to connect to PostHog Artifacts. Use Claude Code, claude.ai, or another MCP client running on your computer.',
+            }),
+            400
+        )
+    }
+    return null
+}
 
 app.get('/authorize', async (c) => {
     const user = c.get('user')
@@ -124,7 +153,9 @@ app.get('/authorize', async (c) => {
     const oauth = c.env.OAUTH_PROVIDER
     try {
         const request = await oauth.parseAuthRequest(c.req.raw)
-        if (await oauth.isConsentRemembered(c.req.raw, request, rememberConsent(c.env, user))) {
+        const refused = clientPolicyError(c, request)
+        if (refused) return refused
+        if (await oauth.isConsentRemembered(c.req.raw, request, await rememberConsent(c.env, user))) {
             const { redirectTo } = await oauth.completeAuthorization({
                 request,
                 userId: user.email,
@@ -146,6 +177,7 @@ app.get('/authorize', async (c) => {
 app.post('/authorize', async (c) => {
     const user = c.get('user')
     if (!user) return loginRedirect(c)
+    if (!sameOrigin(c)) return c.text('Forbidden', 403)
     const oauth = c.env.OAUTH_PROVIDER
     try {
         const form = await c.req.formData()
@@ -156,7 +188,7 @@ app.post('/authorize', async (c) => {
         }
         const approved = await oauth.approveConsent(c.req.raw, handle, {
             scope: SCOPES,
-            remember: rememberConsent(c.env, user),
+            remember: await rememberConsent(c.env, user),
         })
         const { redirectTo } = await oauth.completeAuthorization({
             request: approved.request,
@@ -177,11 +209,12 @@ app.post('/authorize', async (c) => {
 app.get('/a/:id', async (c) => {
     const user = c.get('user')
     const artifact = await getArtifact(c.env, c.req.param('id'))
-    if (!artifact) return notFound(c)
+    // Private artifacts are indistinguishable from missing ones to everyone but the owner:
+    // signed-out visitors are asked to sign in either way, signed-in non-owners get a 404 either way.
+    if (!artifact) return user ? notFound(c) : loginRedirect(c)
     const owner = isOwner(artifact, user)
 
     if (!owner) {
-        // Private artifacts are indistinguishable from missing ones to everyone but the owner.
         if (artifact.visibility !== 'public') return user ? notFound(c) : loginRedirect(c)
         // Only the latest version is shared.
         if (c.req.query('v') && Number(c.req.query('v')) !== artifact.latest_version) return c.redirect(`/a/${artifact.id}`)
@@ -195,7 +228,7 @@ app.get('/a/:id', async (c) => {
         viewerPage({
             user,
             artifact,
-            versions: owner ? await listVersions(c.env, artifact.id) : [],
+            versions: owner ? await listVersions(c.env, artifact.id, 100) : [],
             version,
             owner,
             frameSrc: await frameUrl(c.env, artifact.id, version.version, !owner),

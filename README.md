@@ -86,3 +86,11 @@ Nothing needs to be created by hand.
 4. Push to `main`. Every push after that deploys automatically.
 
 Rotating `SESSION_SECRET` signs everyone out and invalidates open iframe grants. MCP tokens are unaffected.
+
+**Revoking someone** (offboarding, incidents) takes effect immediately for both the web and MCP:
+
+```sh
+pnpm wrangler kv key put --binding OAUTH_KV --remote revoked:someone@posthog.com 1
+```
+
+See [SECURITY.md](SECURITY.md) for the threat model and the controls behind it.

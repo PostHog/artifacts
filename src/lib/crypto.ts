@@ -31,6 +31,11 @@ export async function sha256Hex(data: Uint8Array): Promise<string> {
     return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+/** Derives an independent secret for a third-party consumer (e.g. the OAuth library) from SESSION_SECRET. */
+export async function deriveSecret(secret: string, label: string): Promise<string> {
+    return sign(secret, `derive.${label}`)
+}
+
 async function hmacKey(secret: string): Promise<CryptoKey> {
     return crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, [
         'sign',
@@ -51,16 +56,22 @@ export async function verify(secret: string, payload: string, signature: string)
     }
 }
 
+/**
+ * Every signed token names its purpose, and the purpose is part of what's signed, so a token minted
+ * for one use (say, a public iframe grant anyone can obtain) can never be replayed as another (a session).
+ */
+export type TokenPurpose = 'session' | 'frame' | 'login'
+
 /** Signs a JSON value with an expiry, producing `<payload>.<signature>`. */
-export async function sealToken(secret: string, value: object, ttlSeconds: number): Promise<string> {
+export async function sealToken(secret: string, purpose: TokenPurpose, value: object, ttlSeconds: number): Promise<string> {
     const payload = base64url(encoder.encode(JSON.stringify({ ...value, exp: Math.floor(Date.now() / 1000) + ttlSeconds })))
-    return `${payload}.${await sign(secret, payload)}`
+    return `${payload}.${await sign(secret, `${purpose}.${payload}`)}`
 }
 
-export async function openToken<T>(secret: string, token: string | undefined | null): Promise<T | null> {
+export async function openToken<T>(secret: string, purpose: TokenPurpose, token: string | undefined | null): Promise<T | null> {
     if (!token) return null
     const [payload, signature] = token.split('.')
-    if (!payload || !signature || !(await verify(secret, payload, signature))) return null
+    if (!payload || !signature || !(await verify(secret, `${purpose}.${payload}`, signature))) return null
     try {
         const value = JSON.parse(new TextDecoder().decode(fromBase64url(payload))) as T & { exp: number }
         return value.exp > Date.now() / 1000 ? value : null

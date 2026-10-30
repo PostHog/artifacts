@@ -3,7 +3,16 @@ import type { AppEnv } from '../env'
 import { openToken, sealToken } from '../lib/crypto'
 import { getArtifact, getContent, getVersion } from '../store'
 
-const FRAME_TOKEN_TTL = 60 * 60 * 6
+// The iframe loads once per page view, so a grant only needs to outlive that load. Short-lived
+// grants also limit the damage if someone copies the content URL instead of the share link.
+const FRAME_TOKEN_TTL = 60 * 10
+
+/**
+ * The same sandbox is applied by the iframe attribute and by the response's CSP. Deliberately absent:
+ * allow-same-origin (content would act as the viewer's origin and, on a posthog.com subdomain, could
+ * toss cookies at every posthog.com app), allow-top-navigation*, and allow-modals (prompt() phishing).
+ */
+export const SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-downloads'
 
 interface FrameGrant {
     id: string
@@ -12,7 +21,7 @@ interface FrameGrant {
     pub?: boolean
 }
 
-const contentOrigin = (env: AppEnv) => env.CONTENT_URL || env.PUBLIC_URL
+export const contentOrigin = (env: AppEnv) => new URL(env.CONTENT_URL || env.PUBLIC_URL).origin
 
 /**
  * The viewer page has already decided the viewer may see this version, so it hands the iframe
@@ -21,20 +30,14 @@ const contentOrigin = (env: AppEnv) => env.CONTENT_URL || env.PUBLIC_URL
  */
 export async function frameUrl(env: AppEnv, id: string, version: number, viaPublicLink: boolean): Promise<string> {
     const grant: FrameGrant = viaPublicLink ? { id, v: version, pub: true } : { id, v: version }
-    const token = await sealToken(env.SESSION_SECRET, grant, FRAME_TOKEN_TTL)
+    const token = await sealToken(env.SESSION_SECRET, 'frame', grant, FRAME_TOKEN_TTL)
     return `${contentOrigin(env)}/c/${id}/${version}?t=${encodeURIComponent(token)}`
 }
 
-/**
- * Untrusted artifact content. `sandbox` without allow-same-origin gives it an opaque origin even
- * when opened top-level, so it can't read the viewer's cookies or call the API as the user.
- */
 function contentHeaders(env: AppEnv): HeadersInit {
-    const separateOrigin = !!env.CONTENT_URL && new URL(env.CONTENT_URL).origin !== new URL(env.PUBLIC_URL).origin
-    const sandbox = `sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads${separateOrigin ? ' allow-same-origin' : ''}`
     return {
         'Content-Type': 'text/html; charset=utf-8',
-        'Content-Security-Policy': `${sandbox}; frame-ancestors ${new URL(env.PUBLIC_URL).origin}`,
+        'Content-Security-Policy': `sandbox ${SANDBOX}; frame-ancestors ${new URL(env.PUBLIC_URL).origin}`,
         'Cache-Control': 'private, no-store',
         'Referrer-Policy': 'no-referrer',
         'X-Robots-Tag': 'noindex, nofollow',
@@ -42,20 +45,30 @@ function contentHeaders(env: AppEnv): HeadersInit {
     }
 }
 
+const refuse = (status: number, message: string) =>
+    new Response(message, { status, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'X-Content-Type-Options': 'nosniff' } })
+
 export async function serveContent(env: AppEnv, request: Request, id: string, version: number): Promise<Response> {
-    const grant = await openToken<FrameGrant>(env.SESSION_SECRET, new URL(request.url).searchParams.get('t'))
-    if (!grant || grant.id !== id || grant.v !== version) {
-        return new Response('This link has expired. Reload the artifact page.', { status: 403, headers: { 'Content-Type': 'text/plain' } })
+    const url = new URL(request.url)
+    // With a dedicated content origin, never serve untrusted content from the app's own origin.
+    if (env.CONTENT_URL && url.origin !== contentOrigin(env)) return refuse(404, 'Not found')
+    // Content only ever renders inside the viewer's iframe, under its PostHog chrome and author line.
+    // Refusing top-level loads stops bare attacker pages at artifacts.posthog.com/c/… (phishing), and
+    // non-browser fetches stop our content being used as, e.g., an OAuth client metadata document.
+    if (request.headers.get('Sec-Fetch-Dest') !== 'iframe') {
+        return refuse(403, 'Artifacts can only be viewed on their artifact page.')
     }
+    const grant = await openToken<FrameGrant>(env.SESSION_SECRET, 'frame', url.searchParams.get('t'))
+    if (!grant || grant.id !== id || grant.v !== version) return refuse(403, 'This link has expired. Reload the artifact page.')
     if (grant.pub) {
         const artifact = await getArtifact(env, id)
         if (!artifact || artifact.visibility !== 'public' || artifact.latest_version !== version) {
-            return new Response('This artifact is no longer shared.', { status: 404, headers: { 'Content-Type': 'text/plain' } })
+            return refuse(404, 'This artifact is no longer shared.')
         }
     }
     const meta = await getVersion(env, id, version)
     const content = meta && (await getContent(env, meta))
-    if (!meta || content == null) return new Response('Not found', { status: 404 })
+    if (!meta || content == null) return refuse(404, 'Not found')
     const body = meta.format === 'markdown' ? renderMarkdown(content) : content
     return new Response(body, { headers: contentHeaders(env) })
 }

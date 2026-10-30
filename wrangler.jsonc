@@ -14,12 +14,15 @@
   "vars": {
     // Canonical public origin: share links, OAuth resource metadata, cookies. Override in .dev.vars locally.
     "PUBLIC_URL": "https://artifacts.posthog.com",
-    // Optional separate origin for rendering untrusted artifact content (e.g. https://artifacts-content.posthog.com).
-    // Leave empty to serve content from PUBLIC_URL behind a CSP sandbox.
+    // Optional separate origin for rendering untrusted artifact content. Use a *different registrable domain*
+    // (e.g. https://posthogusercontent.com), never a posthog.com subdomain. Empty = serve from PUBLIC_URL
+    // behind a CSP sandbox, which is safe because content always runs with an opaque origin.
     "CONTENT_URL": "",
     "ALLOWED_EMAIL_DOMAIN": "posthog.com",
     // "Sign in with PostHog". Region-agnostic: routes US and EU accounts.
     "POSTHOG_OAUTH_HOST": "https://oauth.posthog.com",
+    // https hosts MCP clients may receive tokens at, besides loopback (Claude Code etc.). See src/lib/policy.ts.
+    "MCP_REDIRECT_HOSTS": "claude.ai,claude.com",
     // Only honoured when PUBLIC_URL is localhost, so it can't be switched on in production.
     "DEV_LOGIN": "false"
   },
@@ -27,5 +30,10 @@
   // The schema is applied by the Worker itself (src/lib/migrate.ts), so deploys need no migration step.
   "d1_databases": [{ "binding": "DB" }],
   "r2_buckets": [{ "binding": "BUCKET" }],
-  "kv_namespaces": [{ "binding": "OAUTH_KV" }]
+  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
+  // Abuse limits (per Cloudflare location). namespace_id is any account-unique integer string.
+  "ratelimits": [
+    { "name": "PUBLISH_LIMITER", "namespace_id": "4201", "simple": { "limit": 30, "period": 60 } },
+    { "name": "REGISTER_LIMITER", "namespace_id": "4202", "simple": { "limit": 10, "period": 60 } }
+  ]
 }

@@ -3,6 +3,7 @@ import { html, raw } from 'hono/html'
 import type { HtmlEscapedString } from 'hono/utils/html'
 import type { User } from '../env'
 import type { Artifact, Version } from '../store'
+import { SANDBOX } from './content'
 
 type Html = HtmlEscapedString | Promise<HtmlEscapedString>
 
@@ -158,7 +159,7 @@ export function viewerPage({ user, artifact, versions, version, owner, frameSrc,
   ${owner ? visibilityPill(artifact.visibility) : ''}
   <span class="meta">${owner ? 'Updated' : 'By ' + author + ' ·'} ${relativeTime(isLatest ? artifact.updated_at : version.created_at)}</span>`
 
-    const actions = html`<a class="ghost hide-sm" href="${frameSrc}" target="_blank" rel="noopener noreferrer" title="Open in a new tab">${expandIcon}</a>
+    const actions = html`<button class="ghost hide-sm" type="button" data-fullscreen title="Full screen">${expandIcon}</button>
   ${share}`
 
     return layout({
@@ -173,7 +174,7 @@ ${appBar({ user, next: `/a/${artifact.id}`, center, actions })}
 ${!isLatest
     ? html`<div class="banner">You're viewing version ${version.version}. People you share with only see the latest. <a href="/a/${artifact.id}">View latest (v${artifact.latest_version})</a></div>`
     : ''}
-<iframe src="${frameSrc}" title="${artifact.title}" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads" allow="clipboard-write; fullscreen" referrerpolicy="no-referrer"></iframe>
+<iframe src="${frameSrc}" title="${artifact.title}" sandbox="${SANDBOX}" allow="clipboard-write; fullscreen" referrerpolicy="no-referrer"></iframe>
 </div>
 <div class="toast" role="status" aria-live="polite"></div>
 <script src="/viewer.js" defer></script>`,
@@ -183,10 +184,10 @@ ${!isLatest
 export function homePage({ user, artifacts, publicUrl }: { user: User | null; artifacts: Artifact[]; publicUrl: string }) {
     const setup = html`<div class="card">
   <strong>Connect Claude Code</strong>
-  <p class="small muted" style="margin:4px 0 0">Install the plugin to get the MCP server and the <code>/share-artifact</code> skill:</p>
+  <p class="small muted tight">Install the plugin to get the MCP server and the <code>/share-artifact</code> skill:</p>
   <pre class="snippet">/plugin marketplace add PostHog/artifacts
 /plugin install posthog-artifacts@posthog-artifacts</pre>
-  <p class="small muted" style="margin:12px 0 0">Or just add the MCP server to any MCP client:</p>
+  <p class="small muted spaced">Or just add the MCP server to any MCP client:</p>
   <pre class="snippet">claude mcp add --transport http posthog-artifacts ${publicUrl}/mcp</pre>
 </div>`
 
@@ -198,7 +199,7 @@ export function homePage({ user, artifacts, publicUrl }: { user: User | null; ar
 <main class="page">
   <h1>Artifacts</h1>
   <p class="lede">A place for the reports, write-ups and pages we make with Claude. Publish from any Claude session, share with a link.</p>
-  <div class="row-actions" style="margin-bottom:32px"><a class="btn lg" href="/auth/posthog"><span>Sign in with PostHog</span></a><span class="small muted">PostHog staff only</span></div>
+  <div class="row-actions hero-actions"><a class="btn lg" href="/auth/posthog"><span>Sign in with PostHog</span></a><span class="small muted">PostHog staff only</span></div>
   ${setup}
 </main>`,
         })
@@ -206,11 +207,11 @@ export function homePage({ user, artifacts, publicUrl }: { user: User | null; ar
 
     return layout({
         title: 'Your artifacts · PostHog Artifacts',
-        body: html`${appBar({ user, next: '/', actions: html`<a class="ghost" href="/logout">Sign out</a>` })}
+        body: html`${appBar({ user, next: '/', actions: html`<form method="post" action="/logout"><button class="ghost" type="submit">Sign out</button></form>` })}
 <main class="page">
   <h1>Your artifacts</h1>
   <p class="lede">Everything you've published. Ask Claude to publish or update one, or use <code>/share-artifact</code>.</p>
-  <div class="card" style="padding:0">
+  <div class="card flush">
   ${artifacts.length
       ? html`<table class="list">
     <thead><tr><th>Title</th><th class="hide-sm">Access</th><th class="num hide-sm">Version</th><th class="num">Updated</th></tr></thead>

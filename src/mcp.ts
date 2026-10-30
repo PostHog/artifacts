@@ -1,7 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/server'
-import { createMcpHandler, getMcpAuthContext } from 'agents/mcp/server'
+import { createMcpHandler } from 'agents/mcp/server'
 import { z } from 'zod'
 import type { AppEnv, User } from './env'
+import { isAllowedEmail, isRevoked } from './lib/session'
 import {
     type Artifact,
     MAX_CONTENT_BYTES,
@@ -92,6 +93,8 @@ export function buildServer(env: AppEnv, user: User): McpServer {
             annotations: { destructiveHint: false, idempotentHint: false },
         },
         guarded(async (args) => {
+            const { success } = await env.PUBLISH_LIMITER.limit({ key: user.email })
+            if (!success) throw new StoreError('invalid', 'Too many publishes in the last minute; wait a moment and retry')
             const { artifact, version } = await publish(env, user, {
                 artifactId: args.artifact_id,
                 title: args.title,
@@ -198,14 +201,39 @@ export function buildServer(env: AppEnv, user: User): McpServer {
 
 /** OAuthProvider's API handler: `ctx.props` holds the identity stored by completeAuthorization(). */
 export const mcpApiHandler = {
-    fetch(request: Request, env: AppEnv, ctx: ExecutionContext) {
-        const handler = createMcpHandler(
-            () => {
-                const props = getMcpAuthContext()?.props as unknown as User
-                return buildServer(env, { email: props.email, name: props.name })
-            },
-            { route: '/mcp', authContext: { props: (ctx.props ?? {}) as Record<string, unknown> } }
-        )
-        return handler(request, env, ctx)
+    async fetch(request: Request, env: AppEnv, ctx: ExecutionContext) {
+        const props = (ctx.props ?? {}) as Partial<User>
+        // Grants are only ever minted for allowed users, but re-check: the domain policy may tighten
+        // and revoked users (offboarding, incidents) must lose MCP access without waiting for token expiry.
+        if (typeof props.email !== 'string' || !isAllowedEmail(env, props.email) || (await isRevoked(env, props.email))) {
+            return Response.json({ error: 'access_revoked' }, { status: 403 })
+        }
+        const user: User = { email: props.email, name: typeof props.name === 'string' ? props.name : props.email }
+        const handler = createMcpHandler(() => buildServer(env, user), { route: '/mcp', maxRequestBodySize: MAX_REQUEST_BYTES })
+
+        // agents' protocol-era check and legacy (2025-era) handler both read the body with the SDK's 4 MB
+        // default, ignoring maxRequestBodySize, which breaks publishing anything near MAX_CONTENT_BYTES.
+        // Read and bound the body ourselves and hand it over parsed, so nothing downstream re-reads it.
+        if (request.method !== 'POST') return handler.fetch(request)
+        if (Number(request.headers.get('Content-Length') ?? 0) > MAX_REQUEST_BYTES) return tooLarge()
+        const text = await request.text()
+        if (new TextEncoder().encode(text).byteLength > MAX_REQUEST_BYTES) return tooLarge()
+        let parsedBody: unknown
+        try {
+            parsedBody = JSON.parse(text)
+        } catch {
+            parsedBody = undefined
+        }
+        const replay = new Request(request, { body: text })
+        return handler.fetch(replay, parsedBody === undefined ? undefined : { parsedBody })
     },
 }
+
+// Room for a MAX_CONTENT_BYTES artifact after JSON string escaping (worst case ~2x) plus the envelope.
+const MAX_REQUEST_BYTES = MAX_CONTENT_BYTES * 2 + 64 * 1024
+
+const tooLarge = () =>
+    Response.json(
+        { jsonrpc: '2.0', id: null, error: { code: -32000, message: `Request body exceeds ${MAX_REQUEST_BYTES} bytes` } },
+        { status: 413 }
+    )

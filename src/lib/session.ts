@@ -1,7 +1,8 @@
 import type { AppEnv, User } from '../env'
 import { openToken, sealToken } from './crypto'
 
-const SESSION_TTL = 60 * 60 * 24 * 30
+// Sessions are stateless, so keep them short-ish; revocation (isRevoked) covers the rest.
+const SESSION_TTL = 60 * 60 * 24 * 7
 
 export function isLocal(env: AppEnv): boolean {
     const host = new URL(env.PUBLIC_URL).hostname
@@ -28,24 +29,44 @@ export function serializeCookie(env: AppEnv, name: string, value: string, maxAge
 }
 
 export async function getUser(env: AppEnv, request: Request): Promise<User | null> {
-    const session = await openToken<User>(env.SESSION_SECRET, readCookie(request, cookieName(env, 'session')))
-    return session ? { email: session.email, name: session.name } : null
+    const session = await openToken<Partial<User>>(env.SESSION_SECRET, 'session', readCookie(request, cookieName(env, 'session')))
+    if (!session || typeof session.email !== 'string' || !isAllowedEmail(env, session.email)) return null
+    if (await isRevoked(env, session.email)) return null
+    return { email: session.email, name: typeof session.name === 'string' ? session.name : session.email }
+}
+
+/**
+ * Offboarding / incident kill switch: `wrangler kv key put --binding OAUTH_KV --remote revoked:<email> 1`.
+ * Checked on every web request and every MCP call, so it cuts off sessions and MCP tokens immediately.
+ */
+export async function isRevoked(env: AppEnv, email: string): Promise<boolean> {
+    return (await env.OAUTH_KV.get(`revoked:${email.toLowerCase()}`)) !== null
 }
 
 export async function sessionCookie(env: AppEnv, user: User): Promise<string> {
-    return serializeCookie(env, 'session', await sealToken(env.SESSION_SECRET, user, SESSION_TTL), SESSION_TTL)
+    return serializeCookie(env, 'session', await sealToken(env.SESSION_SECRET, 'session', user, SESSION_TTL), SESSION_TTL)
 }
 
 export function clearSessionCookie(env: AppEnv): string {
     return serializeCookie(env, 'session', '', 0)
 }
 
-/** Only allow same-site relative redirects after login. */
-export function safeNext(next: string | null | undefined): string {
-    if (!next || !next.startsWith('/') || next.startsWith('//') || next.startsWith('/\\')) return '/'
-    return next
+/**
+ * Only allow redirects back to our own origin after login. Resolve against PUBLIC_URL rather than
+ * pattern-match, because browsers strip tabs/newlines and treat `\` as `/` (e.g. `/%09/evil.example`).
+ */
+export function safeNext(env: AppEnv, next: string | null | undefined): string {
+    if (!next || !next.startsWith('/') || /[\u0000-\u001f\u007f\\]/.test(next)) return '/'
+    try {
+        const base = new URL(env.PUBLIC_URL)
+        const url = new URL(next, base)
+        return url.origin === base.origin ? url.pathname + url.search + url.hash : '/'
+    } catch {
+        return '/'
+    }
 }
 
 export function isAllowedEmail(env: AppEnv, email: string): boolean {
-    return email.toLowerCase().endsWith(`@${env.ALLOWED_EMAIL_DOMAIN.toLowerCase()}`)
+    const [local, domain, ...rest] = email.toLowerCase().split('@')
+    return !!local && rest.length === 0 && domain === env.ALLOWED_EMAIL_DOMAIN.toLowerCase()
 }

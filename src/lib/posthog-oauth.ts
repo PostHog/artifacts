@@ -1,6 +1,6 @@
 import type { AppEnv, User } from '../env'
 import { base64url, fromBase64url, openToken, randomId, sealToken } from './crypto'
-import { cookieName, isAllowedEmail, readCookie, serializeCookie } from './session'
+import { cookieName, isAllowedEmail, isRevoked, readCookie, serializeCookie } from './session'
 
 /**
  * "Sign in with PostHog" over OAuth 2.1 + OIDC (https://posthog.com/docs/api/oauth).
@@ -21,7 +21,29 @@ interface LoginState {
     next: string
 }
 
-export class LoginError extends Error {}
+/**
+ * Errors travel to the login page as a code in the query string, never as text, so a crafted
+ * link can't put attacker-written words on the real sign-in page.
+ */
+const LOGIN_ERRORS = {
+    unavailable: "Couldn't reach PostHog sign-in. Please try again in a moment.",
+    expired: 'Your sign-in link expired. Please try again.',
+    cancelled: 'PostHog sign-in was cancelled.',
+    failed: 'PostHog sign-in failed. Please try again.',
+    not_allowed: 'Only PostHog accounts with a verified company email can sign in.',
+    revoked: 'Your access to Artifacts has been revoked.',
+} as const
+export type LoginErrorCode = keyof typeof LOGIN_ERRORS
+
+export function loginErrorMessage(code: string | undefined): string | undefined {
+    return code && Object.hasOwn(LOGIN_ERRORS, code) ? LOGIN_ERRORS[code as LoginErrorCode] : undefined
+}
+
+export class LoginError extends Error {
+    constructor(public code: LoginErrorCode) {
+        super(LOGIN_ERRORS[code])
+    }
+}
 
 const oauthHost = (env: AppEnv) => env.POSTHOG_OAUTH_HOST || 'https://oauth.posthog.com'
 const redirectUri = (env: AppEnv) => `${env.PUBLIC_URL}/auth/posthog/callback`
@@ -65,7 +87,7 @@ async function clientId(env: AppEnv): Promise<string> {
     })
     if (!response.ok) {
         console.error('posthog client registration failed', response.status, await response.text())
-        throw new LoginError(`Couldn't register with PostHog OAuth (${response.status}).`)
+        throw new LoginError('unavailable')
     }
     const { client_id } = await response.json<{ client_id: string }>()
     await env.OAUTH_KV.put(cacheKey, client_id)
@@ -97,7 +119,7 @@ export async function beginPostHogLogin(env: AppEnv, next: string): Promise<Resp
         status: 302,
         headers: {
             Location: url.toString(),
-            'Set-Cookie': serializeCookie(env, 'login', await sealToken(env.SESSION_SECRET, login, LOGIN_TTL), LOGIN_TTL),
+            'Set-Cookie': serializeCookie(env, 'login', await sealToken(env.SESSION_SECRET, 'login', login, LOGIN_TTL), LOGIN_TTL),
         },
     })
 }
@@ -111,28 +133,49 @@ interface Claims {
     aud?: string | string[]
     exp?: number
     nonce?: string
+    iss?: string
+}
+
+/** The region-agnostic host may hand back an ID token issued by the user's regional instance. */
+function trustedIssuer(env: AppEnv, iss: string | undefined): boolean {
+    try {
+        const url = new URL(iss ?? '')
+        if (url.protocol !== 'https:') return false
+        return url.hostname === new URL(oauthHost(env)).hostname || /^(us|eu|oauth)\.posthog\.com$/.test(url.hostname)
+    } catch {
+        return false
+    }
 }
 
 /**
  * The ID token arrives straight from the token endpoint over TLS, which OIDC Core §3.1.3.7 accepts
- * in place of a signature check. We still bind it to this client, this login (nonce) and its expiry.
+ * in place of a signature check. We still bind it to the issuer, this client, this login (nonce) and its expiry.
  */
-function idTokenClaims(idToken: string, login: LoginState): Claims {
-    const [, payload] = idToken.split('.')
-    if (!payload) throw new LoginError('PostHog returned an invalid ID token.')
-    const claims = JSON.parse(new TextDecoder().decode(fromBase64url(payload))) as Claims
+function idTokenClaims(env: AppEnv, idToken: string, login: LoginState): Claims {
+    let claims: Claims
+    try {
+        claims = JSON.parse(new TextDecoder().decode(fromBase64url(idToken.split('.')[1] ?? ''))) as Claims
+    } catch {
+        throw new LoginError('failed')
+    }
     const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud]
-    if (!audiences.includes(login.clientId) || (claims.exp ?? 0) < Date.now() / 1000 || claims.nonce !== login.nonce) {
-        throw new LoginError('PostHog returned an ID token for a different sign-in. Please try again.')
+    if (
+        !trustedIssuer(env, claims.iss) ||
+        !audiences.includes(login.clientId) ||
+        (claims.exp ?? 0) < Date.now() / 1000 ||
+        claims.nonce !== login.nonce
+    ) {
+        console.warn('posthog id token rejected', { iss: claims.iss, audOk: audiences.includes(login.clientId), nonceOk: claims.nonce === login.nonce })
+        throw new LoginError('failed')
     }
     return claims
 }
 
 export async function finishPostHogLogin(env: AppEnv, request: Request): Promise<{ user: User; next: string }> {
     const params = new URL(request.url).searchParams
-    const login = await openToken<LoginState>(env.SESSION_SECRET, readCookie(request, cookieName(env, 'login')))
-    if (!login || login.state !== params.get('state')) throw new LoginError('Your sign-in link expired. Please try again.')
-    if (params.get('error')) throw new LoginError('PostHog sign-in was cancelled.')
+    const login = await openToken<LoginState>(env.SESSION_SECRET, 'login', readCookie(request, cookieName(env, 'login')))
+    if (!login || login.state !== params.get('state')) throw new LoginError('expired')
+    if (params.get('error')) throw new LoginError('cancelled')
 
     const tokenResponse = await fetch(`${oauthHost(env)}/oauth/token/`, {
         method: 'POST',
@@ -147,27 +190,28 @@ export async function finishPostHogLogin(env: AppEnv, request: Request): Promise
     })
     if (!tokenResponse.ok) {
         console.error('posthog token exchange failed', tokenResponse.status, await tokenResponse.text())
-        throw new LoginError('PostHog sign-in failed. Please try again.')
+        throw new LoginError('failed')
     }
     const tokens = await tokenResponse.json<{ access_token: string; id_token?: string }>()
 
     let claims: Claims
     if (tokens.id_token) {
-        claims = idTokenClaims(tokens.id_token, login)
+        claims = idTokenClaims(env, tokens.id_token, login)
     } else {
         const userinfo = await fetch(`${oauthHost(env)}/oauth/userinfo/`, {
             headers: { Authorization: `Bearer ${tokens.access_token}` },
         })
-        if (!userinfo.ok) throw new LoginError('Could not read your PostHog profile.')
+        if (!userinfo.ok) throw new LoginError('failed')
         claims = await userinfo.json<Claims>()
     }
 
     // Anyone can sign up to PostHog with any address, so the email must be verified, not just match.
     if (!claims.email || claims.email_verified !== true || !isAllowedEmail(env, claims.email)) {
         console.warn('posthog sign-in rejected', { hasEmail: !!claims.email, emailVerified: claims.email_verified, claims: Object.keys(claims) })
-        throw new LoginError(`Only verified @${env.ALLOWED_EMAIL_DOMAIN} PostHog accounts can sign in.`)
+        throw new LoginError('not_allowed')
     }
     const email = claims.email.toLowerCase()
+    if (await isRevoked(env, email)) throw new LoginError('revoked')
     const name = [claims.given_name, claims.family_name].filter(Boolean).join(' ') || email
     return { user: { email, name }, next: login.next }
 }

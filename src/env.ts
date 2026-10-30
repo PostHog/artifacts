@@ -13,6 +13,10 @@ export interface AppEnv {
     SESSION_SECRET: string
     /** PostHog OAuth server; defaults to the region-agnostic https://oauth.posthog.com. */
     POSTHOG_OAUTH_HOST: string
+    /** Comma-separated https hosts MCP clients may redirect to, besides loopback. Default: claude.ai,claude.com */
+    MCP_REDIRECT_HOSTS: string
+    PUBLISH_LIMITER: RateLimit
+    REGISTER_LIMITER: RateLimit
 }
 
 /** Identity of a signed-in PostHog staff member, shared by web sessions and MCP tokens. */

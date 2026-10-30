@@ -39,6 +39,16 @@ export class StoreError extends Error {
 // Each version gets a unique object key so concurrent publishes can never overwrite each other's content.
 const newObjectKey = (id: string) => `a/${id}/${randomId(16)}`
 
+/** Deletes an uploaded object if the D1 write that would reference it fails, so R2 never accumulates orphans. */
+async function withCleanup<T>(env: AppEnv, key: string, write: () => Promise<T>): Promise<T> {
+    try {
+        return await write()
+    } catch (error) {
+        await env.BUCKET.delete(key).catch(() => {})
+        throw error
+    }
+}
+
 export function isOwner(artifact: Artifact, user: User | null): boolean {
     return !!user && artifact.owner_email.toLowerCase() === user.email.toLowerCase()
 }
@@ -68,9 +78,9 @@ export async function listArtifacts(
     return results
 }
 
-export async function listVersions(env: AppEnv, id: string): Promise<Version[]> {
-    const { results } = await env.DB.prepare('SELECT * FROM versions WHERE artifact_id = ? ORDER BY version DESC')
-        .bind(id)
+export async function listVersions(env: AppEnv, id: string, limit = -1): Promise<Version[]> {
+    const { results } = await env.DB.prepare('SELECT * FROM versions WHERE artifact_id = ? ORDER BY version DESC LIMIT ?')
+        .bind(id, limit)
         .all<Version>()
     return results
 }
@@ -115,7 +125,7 @@ export async function publish(env: AppEnv, user: User, input: PublishInput): Pro
         const id = randomId()
         const key = newObjectKey(id)
         await env.BUCKET.put(key, bytes, { httpMetadata: { contentType: contentTypeFor(input.format) } })
-        await env.DB.batch([
+        await withCleanup(env, key, () => env.DB.batch([
             env.DB.prepare(
                 `INSERT INTO artifacts (id, owner_email, owner_name, title, description, visibility, latest_version, created_at, updated_at)
                  VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`
@@ -123,7 +133,7 @@ export async function publish(env: AppEnv, user: User, input: PublishInput): Pro
             env.DB.prepare(
                 'INSERT INTO versions (artifact_id, version, format, size, sha256, object_key, note, created_at) VALUES (?, 1, ?, ?, ?, ?, ?, ?)'
             ).bind(id, input.format, bytes.byteLength, sha256, key, input.note ?? null, now),
-        ])
+        ]))
         return {
             artifact: (await getArtifact(env, id))!,
             version: (await getVersion(env, id, 1))!,
@@ -156,7 +166,10 @@ export async function publish(env: AppEnv, user: User, input: PublishInput): Pro
                 }
             }
         } catch (error) {
-            if (!String(error).includes('UNIQUE') && !String(error).includes('PRIMARY KEY')) throw error
+            if (!String(error).includes('UNIQUE') && !String(error).includes('PRIMARY KEY')) {
+                await env.BUCKET.delete(key).catch(() => {})
+                throw error
+            }
         }
         // Lost the race: this attempt's object was never referenced, so remove it.
         await env.BUCKET.delete(key)

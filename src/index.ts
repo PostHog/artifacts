@@ -1,6 +1,7 @@
 import { OAuthProvider } from '@cloudflare/workers-oauth-provider'
 import type { AppEnv } from './env'
 import { ensureSchema } from './lib/migrate'
+import { isAllowedRedirectUri } from './lib/policy'
 import { mcpApiHandler } from './mcp'
 import { app } from './web/app'
 
@@ -24,6 +25,13 @@ function getProvider(env: AppEnv): OAuthProvider<AppEnv> {
             authorizeEndpoint: '/authorize',
             tokenEndpoint: '/oauth/token',
             clientRegistrationEndpoint: '/oauth/register',
+            // Refuse clients whose redirect URIs fall outside policy at registration, not just at /authorize.
+            clientRegistrationCallback: ({ clientMetadata }) => {
+                const uris = Array.isArray(clientMetadata.redirect_uris) ? clientMetadata.redirect_uris : []
+                if (!uris.length || !uris.every((uri) => typeof uri === 'string' && isAllowedRedirectUri(env, uri))) {
+                    return { description: 'redirect_uris must be loopback or an allowed MCP client host' }
+                }
+            },
             clientIdMetadataDocumentEnabled: true,
             scopesSupported: ['artifacts', 'offline_access'],
             requiredScopes: ['artifacts'],
@@ -57,6 +65,11 @@ export default {
             if (url.host === new URL(env.CONTENT_URL).host && url.host !== new URL(env.PUBLIC_URL).host && !url.pathname.startsWith('/c/')) {
                 return new Response('Not found', { status: 404 })
             }
+        }
+        // Dynamic client registration is unauthenticated; cap it per IP so it can't be used to fill KV.
+        if (request.method === 'POST' && new URL(request.url).pathname === '/oauth/register') {
+            const { success } = await env.REGISTER_LIMITER.limit({ key: request.headers.get('CF-Connecting-IP') ?? 'unknown' })
+            if (!success) return Response.json({ error: 'slow_down', error_description: 'Too many registrations' }, { status: 429 })
         }
         await ensureSchema(env.DB)
         return getProvider(env).fetch(request, env, ctx)

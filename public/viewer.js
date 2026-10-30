@@ -65,4 +65,8 @@
         }
     })
     copy?.addEventListener('click', copyLink)
+
+    document.querySelector('[data-fullscreen]')?.addEventListener('click', () => {
+        document.querySelector('.viewer iframe')?.requestFullscreen?.().catch(() => {})
+    })
 })()
