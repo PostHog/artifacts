@@ -63,7 +63,9 @@ export function clientMetadata(env: AppEnv) {
         grant_types: ['authorization_code'],
         response_types: ['code'],
         token_endpoint_auth_method: 'none',
-        'com.posthog': { scopes: SCOPES.split(' ') },
+        // The app's scope ceiling. OIDC scopes are always allowed on top of it, and PostHog rejects a
+        // ceiling made only of them; leaving it out grants every self-serve scope. user:read is the narrowest real one.
+        'com.posthog': { scopes: ['user:read'] },
     }
 }
 
