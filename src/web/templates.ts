@@ -198,7 +198,7 @@ export function homePage({ user, artifacts, publicUrl }: { user: User | null; ar
 <main class="page">
   <h1>Artifacts</h1>
   <p class="lede">A place for the reports, write-ups and pages we make with Claude. Publish from any Claude session, share with a link.</p>
-  <div class="row-actions" style="margin-bottom:32px"><a class="btn lg" href="/login"><span>Sign in with Google</span></a><span class="small muted">PostHog staff only</span></div>
+  <div class="row-actions" style="margin-bottom:32px"><a class="btn lg" href="/auth/posthog"><span>Sign in with PostHog</span></a><span class="small muted">PostHog staff only</span></div>
   ${setup}
 </main>`,
         })
@@ -233,18 +233,16 @@ export function homePage({ user, artifacts, publicUrl }: { user: User | null; ar
     })
 }
 
-export function loginPage({ next, error, google, dev }: { next: string; error?: string; google: boolean; dev: boolean }) {
+export function loginPage({ next, error, dev }: { next: string; error?: string; dev: boolean }) {
     return layout({
         title: 'Sign in · PostHog Artifacts',
         body: html`${appBar({ user: null, next })}
 <main class="page narrow">
   <h1>Sign in</h1>
-  <p class="lede">Use your PostHog Google account.</p>
+  <p class="lede">Use your PostHog account. Only verified @posthog.com emails can sign in.</p>
   ${error ? html`<p class="error">${error}</p>` : ''}
   <div class="stack">
-    ${google
-        ? html`<a class="btn lg" href="/auth/google?next=${encodeURIComponent(next)}"><span>Continue with Google</span></a>`
-        : html`<p class="muted small">Google sign-in isn't configured (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET).</p>`}
+    <a class="btn lg" href="/auth/posthog?next=${encodeURIComponent(next)}"><span>Continue with PostHog</span></a>
     ${dev
         ? html`<form class="card stack" method="post" action="/login/dev">
       <strong>Local dev login</strong>

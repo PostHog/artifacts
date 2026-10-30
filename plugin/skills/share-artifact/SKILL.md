@@ -13,7 +13,7 @@ You publish through the `posthog-artifacts` MCP server (tools: `publish_artifact
 claude mcp add --transport http posthog-artifacts https://artifacts.posthog.com/mcp
 ```
 
-then `/mcp` to sign in with their PostHog Google account, and stop.
+then `/mcp` to sign in with their PostHog account, and stop.
 
 ## 1. Decide what to publish
 

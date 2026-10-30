@@ -2,5 +2,3 @@
 PUBLIC_URL=http://localhost:8787
 DEV_LOGIN=true
 SESSION_SECRET=change-me-to-at-least-32-random-characters
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=

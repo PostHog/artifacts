@@ -7,7 +7,7 @@
 ```
                        ┌───────────────── Cloudflare Worker (artifacts.posthog.com) ─────────────────┐
 Claude Code ── MCP ──▶ │ /mcp            OAuth-protected MCP server (6 tools)                        │
-  (OAuth, DCR/CIMD)    │ /authorize      consent page → Google sign-in (@posthog.com only)           │
+  (OAuth, DCR/CIMD)    │ /authorize      consent page → Sign in with PostHog (@posthog.com)       │
                        │ /oauth/*        token + client registration (workers-oauth-provider)        │
 Browser ─────────────▶ │ /a/:id          viewer: PostHog-branded chrome + sandboxed iframe           │
                        │ /c/:id/:v?t=…   artifact content, CSP-sandboxed, short-lived signed grant   │
@@ -15,7 +15,7 @@ Browser ─────────────▶ │ /a/:id          viewer: P
                               D1 (metadata)      R2 (content)        KV (OAuth grants)
 ```
 
-- **Identity:** Google OAuth restricted to verified `@posthog.com` accounts. The same identity backs web sessions and MCP tokens, so MCP clients sign in once in the browser.
+- **Identity:** "Sign in with PostHog" ([PostHog OAuth](https://posthog.com/docs/api/oauth), OIDC + PKCE, public client), restricted to PostHog accounts with a **verified** `@posthog.com` email. In production the `client_id` is our own Client ID Metadata Document (`/oauth/client-metadata.json`), so there is no client secret to manage. Locally, PostHog can't fetch that document, so the Worker registers a dev client through PostHog's dynamic client registration. The same identity backs web sessions and MCP tokens, so MCP clients sign in once in the browser.
 - **Links:** `/a/<22 base62 chars>`, about 131 bits of randomness, so links can't be guessed or enumerated. Every response sends `noindex` and `Referrer-Policy`, so links don't leak through search engines or referrers.
 - **Sharing:**
   - **Private** (the default): only the owner can view. Everyone else gets a 404, so they can't tell the artifact exists.
@@ -82,7 +82,6 @@ Nothing needs to be created by hand.
    - Node and pnpm versions come from `.node-version` and `packageManager`.
 2. **Set the runtime secrets** under Worker → Settings → Variables & Secrets. Until `SESSION_SECRET` is set, the Worker serves a "not configured yet" page.
    - `SESSION_SECRET`: `openssl rand -hex 32`
-   - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`: from a Google OAuth client of type "Web application", internal to the PostHog Workspace, with the redirect URI `https://artifacts.posthog.com/auth/google/callback`.
 3. **Domain.** `wrangler.jsonc` attaches `artifacts.posthog.com` as a Custom Domain on deploy. This needs the `posthog.com` zone in the same Cloudflare account. If it isn't, remove the `routes` entry, test on the `*.workers.dev` URL by setting `PUBLIC_URL` to it, then add the domain once DNS is ready.
 4. Push to `main`. Every push after that deploys automatically.
 

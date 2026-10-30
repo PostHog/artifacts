@@ -18,6 +18,8 @@
     // Leave empty to serve content from PUBLIC_URL behind a CSP sandbox.
     "CONTENT_URL": "",
     "ALLOWED_EMAIL_DOMAIN": "posthog.com",
+    // "Sign in with PostHog". Region-agnostic: routes US and EU accounts.
+    "POSTHOG_OAUTH_HOST": "https://oauth.posthog.com",
     // Only honoured when PUBLIC_URL is localhost, so it can't be switched on in production.
     "DEV_LOGIN": "false"
   },

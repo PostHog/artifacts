@@ -1,7 +1,7 @@
 import { AuthorizationError, CimdFetchError } from '@cloudflare/workers-oauth-provider'
 import { Hono, type Context } from 'hono'
 import type { AppEnv, User } from '../env'
-import { LoginError, beginGoogleLogin, finishGoogleLogin, googleConfigured } from '../lib/google'
+import { LoginError, beginPostHogLogin, clientMetadata, finishPostHogLogin } from '../lib/posthog-oauth'
 import { clearSessionCookie, getUser, isAllowedEmail, isLocal, safeNext, sessionCookie } from '../lib/session'
 import { StoreError, getArtifact, getVersion, isOwner, listArtifacts, listVersions, setVisibility, shareUrl } from '../store'
 import { frameUrl, serveContent } from './content'
@@ -58,17 +58,27 @@ const devLoginEnabled = (env: AppEnv) => env.DEV_LOGIN === 'true' && isLocal(env
 app.get('/login', (c) => {
     const next = safeNext(c.req.query('next'))
     if (c.get('user')) return c.redirect(next)
-    return c.html(loginPage({ next, error: c.req.query('error'), google: googleConfigured(c.env), dev: devLoginEnabled(c.env) }))
+    return c.html(loginPage({ next, error: c.req.query('error'), dev: devLoginEnabled(c.env) }))
 })
 
-app.get('/auth/google', async (c) => {
-    if (!googleConfigured(c.env)) return c.redirect('/login')
-    return beginGoogleLogin(c.env, safeNext(c.req.query('next')))
+// Client ID Metadata Document: our client_id *is* this URL, so PostHog fetches it to learn our redirect URI.
+app.get('/oauth/client-metadata.json', (c) => {
+    c.header('Cache-Control', 'public, max-age=3600')
+    return c.json(clientMetadata(c.env))
 })
 
-app.get('/auth/google/callback', async (c) => {
+app.get('/auth/posthog', async (c) => {
     try {
-        const { user, next } = await finishGoogleLogin(c.env, c.req.raw)
+        return await beginPostHogLogin(c.env, safeNext(c.req.query('next')))
+    } catch (error) {
+        if (error instanceof LoginError) return c.redirect(`/login?error=${encodeURIComponent(error.message)}`)
+        throw error
+    }
+})
+
+app.get('/auth/posthog/callback', async (c) => {
+    try {
+        const { user, next } = await finishPostHogLogin(c.env, c.req.raw)
         c.header('Set-Cookie', await sessionCookie(c.env, user))
         return c.redirect(next)
     } catch (error) {

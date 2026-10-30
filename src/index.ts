@@ -6,7 +6,7 @@ import { app } from './web/app'
 
 /**
  * One Worker plays three roles:
- *  - OAuth authorization server for MCP clients (Google sign-in behind /authorize)
+ *  - OAuth authorization server for MCP clients (Sign in with PostHog behind /authorize)
  *  - the protected MCP endpoint at /mcp
  *  - the artifact viewer and its sandboxed content routes
  *
@@ -42,7 +42,7 @@ function getProvider(env: AppEnv): OAuthProvider<AppEnv> {
 function notConfigured(env: AppEnv): Response | null {
     if (env.SESSION_SECRET && env.SESSION_SECRET.length >= 32) return null
     return new Response(
-        'PostHog Artifacts is deployed but not configured yet: set the SESSION_SECRET secret (32+ characters, e.g. `openssl rand -hex 32`) under Settings → Variables & Secrets, plus GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET for sign-in.',
+        'PostHog Artifacts is deployed but not configured yet: set the SESSION_SECRET secret (32+ characters, e.g. `openssl rand -hex 32`) under Settings → Variables & Secrets.',
         { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'X-Robots-Tag': 'noindex' } }
     )
 }

@@ -11,8 +11,8 @@ export interface AppEnv {
     ALLOWED_EMAIL_DOMAIN: string
     DEV_LOGIN: string
     SESSION_SECRET: string
-    GOOGLE_CLIENT_ID: string
-    GOOGLE_CLIENT_SECRET: string
+    /** PostHog OAuth server; defaults to the region-agnostic https://oauth.posthog.com. */
+    POSTHOG_OAUTH_HOST: string
 }
 
 /** Identity of a signed-in PostHog staff member, shared by web sessions and MCP tokens. */
