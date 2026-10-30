@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "posthog-artifacts": {
+      "type": "http",
+      "url": "https://artifacts.posthog.com/mcp"
+    }
+  }
+}

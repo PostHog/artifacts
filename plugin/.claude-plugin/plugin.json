@@ -1,0 +1,7 @@
+{
+  "name": "posthog-artifacts",
+  "version": "1.0.0",
+  "description": "Publish HTML and Markdown from any Claude session to artifacts.posthog.com, with versioning and link sharing.",
+  "author": { "name": "PostHog" },
+  "homepage": "https://artifacts.posthog.com"
+}

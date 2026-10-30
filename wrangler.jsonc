@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Must match the Worker name in the Cloudflare dashboard for Workers Builds (deploy on push to main).
+  "name": "posthog-artifacts",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  // global_fetch_strictly_public lets the OAuth provider fetch Client ID Metadata Documents safely.
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "observability": { "enabled": true },
+  "assets": { "directory": "./public", "binding": "ASSETS" },
+  "routes": [{ "pattern": "artifacts.posthog.com", "custom_domain": true }],
+  // Without this, `wrangler dev` rewrites Host/Origin to the production route above.
+  "dev": { "port": 8787, "host": "localhost:8787" },
+  "vars": {
+    // Canonical public origin: share links, OAuth resource metadata, cookies. Override in .dev.vars locally.
+    "PUBLIC_URL": "https://artifacts.posthog.com",
+    // Optional separate origin for rendering untrusted artifact content (e.g. https://artifacts-content.posthog.com).
+    // Leave empty to serve content from PUBLIC_URL behind a CSP sandbox.
+    "CONTENT_URL": "",
+    "ALLOWED_EMAIL_DOMAIN": "posthog.com",
+    // Only honoured when PUBLIC_URL is localhost, so it can't be switched on in production.
+    "DEV_LOGIN": "false"
+  },
+  // No resource IDs: Wrangler provisions these on the first deploy and reuses them afterwards.
+  // The schema is applied by the Worker itself (src/lib/migrate.ts), so deploys need no migration step.
+  "d1_databases": [{ "binding": "DB" }],
+  "r2_buckets": [{ "binding": "BUCKET" }],
+  "kv_namespaces": [{ "binding": "OAUTH_KV" }]
+}

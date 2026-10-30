@@ -1,0 +1,11 @@
+{
+  "name": "posthog-artifacts",
+  "owner": { "name": "PostHog" },
+  "plugins": [
+    {
+      "name": "posthog-artifacts",
+      "source": "./plugin",
+      "description": "Publish Claude output to artifacts.posthog.com: the MCP server plus the /share-artifact skill."
+    }
+  ]
+}

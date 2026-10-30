@@ -1,0 +1,25 @@
+{
+  "name": "posthog-artifacts",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "wrangler types && tsc --noEmit",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^1.2.4",
+    "@modelcontextprotocol/server": "2.4.0",
+    "agents": "^0.32.0",
+    "hono": "^4.13.14",
+    "marked": "^18.1.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.156.0"
+  },
+  "packageManager": "pnpm@10.32.1"
+}
