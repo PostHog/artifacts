@@ -211,11 +211,14 @@ app.get('/a/:id', async (c) => {
     const artifact = await getArtifact(c.env, c.req.param('id'))
     // Private artifacts are indistinguishable from missing ones to everyone but the owner:
     // signed-out visitors are asked to sign in either way, signed-in non-owners get a 404 either way.
+    // Team artifacts look the same to signed-out visitors, so a leaked team link reveals nothing.
     if (!artifact) return user ? notFound(c) : loginRedirect(c)
     const owner = isOwner(artifact, user)
 
     if (!owner) {
-        if (artifact.visibility !== 'public') return user ? notFound(c) : loginRedirect(c)
+        // Every signed-in user is verified PostHog staff (see isAllowedEmail), so "signed in" is "on the team".
+        if (artifact.visibility === 'team' && !user) return loginRedirect(c)
+        if (artifact.visibility === 'private') return user ? notFound(c) : loginRedirect(c)
         // Only the latest version is shared.
         if (c.req.query('v') && Number(c.req.query('v')) !== artifact.latest_version) return c.redirect(`/a/${artifact.id}`)
     }
@@ -231,7 +234,7 @@ app.get('/a/:id', async (c) => {
             versions: owner ? await listVersions(c.env, artifact.id, 100) : [],
             version,
             owner,
-            frameSrc: await frameUrl(c.env, artifact.id, version.version, !owner),
+            frameSrc: await frameUrl(c.env, artifact.id, version.version, owner ? 'owner' : artifact.visibility === 'team' ? 'team' : 'public'),
             shareUrl: shareUrl(c.env, artifact.id),
         })
     )
@@ -242,7 +245,9 @@ app.post('/a/:id/visibility', async (c) => {
     if (!user) return c.text('Sign in required', 401)
     if (!sameOrigin(c)) return c.text('Forbidden', 403)
     const { visibility } = await c.req.json<{ visibility?: string }>().catch(() => ({ visibility: undefined }))
-    if (visibility !== 'private' && visibility !== 'public') return c.text('visibility must be "private" or "public"', 400)
+    if (visibility !== 'private' && visibility !== 'team' && visibility !== 'public') {
+        return c.text('visibility must be "private", "team" or "public"', 400)
+    }
     try {
         const artifact = await setVisibility(c.env, user, c.req.param('id'), visibility)
         return c.json({ id: artifact.id, visibility: artifact.visibility, url: shareUrl(c.env, artifact.id) })

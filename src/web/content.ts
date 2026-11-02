@@ -19,7 +19,12 @@ interface FrameGrant {
     v: number
     /** Issued to a non-owner via the public link: re-checked on every load so unsharing takes effect immediately. */
     pub?: boolean
+    /** Issued to a non-owner staff member via team sharing: re-checked on every load, like pub. */
+    team?: boolean
 }
+
+/** How the viewer got access: as the owner, or as someone the artifact is shared with. */
+export type FrameAccess = 'owner' | 'team' | 'public'
 
 export const contentOrigin = (env: AppEnv) => new URL(env.CONTENT_URL || env.PUBLIC_URL).origin
 
@@ -28,8 +33,8 @@ export const contentOrigin = (env: AppEnv) => new URL(env.CONTENT_URL || env.PUB
  * a short-lived signed URL. The content route then needs no session, which keeps it working on
  * a separate content origin where the session cookie is never sent.
  */
-export async function frameUrl(env: AppEnv, id: string, version: number, viaPublicLink: boolean): Promise<string> {
-    const grant: FrameGrant = viaPublicLink ? { id, v: version, pub: true } : { id, v: version }
+export async function frameUrl(env: AppEnv, id: string, version: number, access: FrameAccess): Promise<string> {
+    const grant: FrameGrant = { id, v: version, ...(access === 'public' && { pub: true }), ...(access === 'team' && { team: true }) }
     const token = await sealToken(env.SESSION_SECRET, 'frame', grant, FRAME_TOKEN_TTL)
     return `${contentOrigin(env)}/c/${id}/${version}?t=${encodeURIComponent(token)}`
 }
@@ -60,9 +65,11 @@ export async function serveContent(env: AppEnv, request: Request, id: string, ve
     }
     const grant = await openToken<FrameGrant>(env.SESSION_SECRET, 'frame', url.searchParams.get('t'))
     if (!grant || grant.id !== id || grant.v !== version) return refuse(403, 'This link has expired. Reload the artifact page.')
-    if (grant.pub) {
+    if (grant.pub || grant.team) {
+        // A team grant went to signed-in staff, who can still view if the artifact has since gone public.
+        const allowed = grant.pub ? ['public'] : ['team', 'public']
         const artifact = await getArtifact(env, id)
-        if (!artifact || artifact.visibility !== 'public' || artifact.latest_version !== version) {
+        if (!artifact || !allowed.includes(artifact.visibility) || artifact.latest_version !== version) {
             return refuse(404, 'This artifact is no longer shared.')
         }
     }

@@ -21,13 +21,15 @@ import {
 } from './store'
 
 const INSTRUCTIONS = `PostHog Artifacts hosts finished content (reports, write-ups, HTML pages, Markdown docs) at artifacts.posthog.com.
-Every artifact has an unguessable link. New artifacts are private (only the owner can see them) unless published with visibility "public", which makes the latest version viewable by anyone with the link.
+Every artifact has an unguessable link. New artifacts are private (only the owner can see them). Visibility "team" makes the latest version viewable by anyone signed in with a @posthog.com account (signed-out visitors are asked to sign in). Visibility "public" makes it viewable by anyone with the link, including people outside PostHog. When the user says to share with colleagues or the team, use "team"; use "public" only when they want it viewable outside PostHog.
 Publishing again with an artifact_id adds a new version; only the latest version is ever shared. Prefer updating an existing artifact over creating duplicates.`
 
 const artifactId = z.string().regex(/^[0-9A-Za-z]{22}$/).describe('The artifact ID (the last part of its URL)')
 const visibility = z
-    .enum(['private', 'public'])
-    .describe('"private": only you can view it. "public": anyone with the link can view the latest version.')
+    .enum(['private', 'team', 'public'])
+    .describe(
+        '"private": only you can view it. "team": anyone signed in with a @posthog.com account can view the latest version. "public": anyone with the link, including people outside PostHog, can view the latest version.'
+    )
 
 function describe(env: AppEnv, artifact: Artifact) {
     return {
@@ -158,7 +160,7 @@ export function buildServer(env: AppEnv, user: User): McpServer {
         {
             title: 'Share or unshare artifact',
             description:
-                'Change who can view an artifact. "public" makes the latest version viewable by anyone with the link; "private" restricts it to you. Older versions are never shared.',
+                'Change who can view an artifact. "team" makes the latest version viewable by anyone signed in with a @posthog.com account; "public" makes it viewable by anyone with the link; "private" restricts it to you. Older versions are never shared.',
             inputSchema: z.object({ artifact_id: artifactId, visibility }),
             annotations: { idempotentHint: true },
         },

@@ -25,7 +25,7 @@
     const form = document.querySelector('[data-share-form]')
     const link = document.querySelector('[data-share-link]')
     const copy = document.querySelector('[data-copy]')
-    const pill = document.querySelector('[data-visibility-pill]')
+    let pill = document.querySelector('[data-visibility-pill]')
 
     const copyLink = async () => {
         try {
@@ -36,6 +36,8 @@
             notify('Press ⌘C to copy')
         }
     }
+
+    let current = form?.querySelector('input:checked')?.value
 
     form?.addEventListener('change', async (event) => {
         const visibility = event.target.value
@@ -48,17 +50,21 @@
                 body: JSON.stringify({ visibility }),
             })
             if (!response.ok) throw new Error(await response.text())
-            const isPublic = visibility === 'public'
-            link.disabled = !isPublic
-            copy.disabled = !isPublic
-            if (pill) {
-                pill.className = isPublic ? 'pill public' : 'pill'
-                pill.lastChild.textContent = isPublic ? ' Public' : ' Private'
+            const shared = visibility !== 'private'
+            link.disabled = !shared
+            copy.disabled = !shared
+            // The server renders every pill variant into <template>s; swap in the matching one.
+            const template = document.querySelector(`template[data-pill="${visibility}"]`)
+            if (pill && template) {
+                const next = template.content.firstElementChild.cloneNode(true)
+                pill.replaceWith(next)
+                pill = next
             }
-            if (isPublic) await copyLink()
+            current = visibility
+            if (shared) await copyLink()
             else notify('Only you can view this now')
         } catch {
-            form.querySelector(`input[value="${visibility === 'public' ? 'private' : 'public'}"]`).checked = true
+            form.querySelector(`input[value="${current}"]`).checked = true
             notify("Couldn't update sharing. Try again.")
         } finally {
             inputs.forEach((input) => (input.disabled = false))

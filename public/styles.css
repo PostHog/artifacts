@@ -165,8 +165,10 @@ h1, h2, h3 { letter-spacing: -0.02em; line-height: 1.2; }
     white-space: nowrap;
 }
 .pill.public { border-color: #b8d8a6; color: #3d6b29; background: #eef7e8; }
+.pill.team { border-color: #b5cdf5; color: #1d4f9c; background: #edf3fd; }
 @media (prefers-color-scheme: dark) {
     .pill.public { border-color: #3d6b29; color: #b8d8a6; background: #1f2b19; }
+    .pill.team { border-color: #1d4f9c; color: #b5cdf5; background: #17233a; }
 }
 
 /* --- Popovers (version picker, share) ------------------------------------- */

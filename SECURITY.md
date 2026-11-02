@@ -31,6 +31,7 @@ This document covers artifacts.posthog.com: one Cloudflare Worker that does thre
 ### 2. Authorization
 - **Owner-only actions.** Every MCP tool and the share endpoint go through `getOwnedArtifact`. Non-owners get "not found".
 - **Private artifacts.** To everyone except the owner, a private artifact looks the same as a missing one: signed-in users get a 404 and signed-out visitors are sent to sign in, in both cases.
+- **Team artifacts.** Viewable by any signed-in user, which means a verified `@posthog.com` account that hasn't been revoked. To signed-out visitors they look exactly like private ones (a sign-in redirect), and they carry no Open Graph tags, so unfurlers learn nothing. Like public links, team access covers the latest version only, and team iframe grants are re-checked on every load, so going back to private, or publishing a new version, cuts off open viewers. A revoked user's already-issued iframe grant lasts until it expires (10 minutes).
 - **Public links.** A public link exposes the latest version only. Public iframe grants are re-checked on every load, so unsharing an artifact, or publishing a new version, cuts off people who already have it open.
 - **Kill switch.** `revoked:<email>` in `OAUTH_KV` is checked on every web request and every MCP call:
   ```sh

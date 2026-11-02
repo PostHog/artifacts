@@ -227,6 +227,34 @@ res = await frame(anon, ownerFrame.replace(/t=[^&]+/, 't=forged.token'))
 assert.equal(res.status, 403)
 step('forged content token rejected')
 
+// Team sharing: any signed-in staff member can view; signed-out visitors can't tell it exists
+await call('set_visibility', { artifact_id: id, visibility: 'team' })
+res = await view(anon, `/a/${id}`)
+assert.equal(res.status, 302, 'signed-out visitors are sent to sign in for team artifacts')
+res = await view(other, `/a/${id}`)
+assert.equal(res.status, 200, 'other staff can see a team artifact')
+const teamHtml = await res.clone().text()
+assert.ok(!teamHtml.includes('data-share-form'), 'no share controls for team viewers')
+assert.ok(!teamHtml.includes('og:title'), 'team artifacts are never unfurled')
+const teamFrame = await frameOf(res)
+res = await frame(other, teamFrame)
+assert.equal(res.status, 200)
+res = await view(other, `/a/${id}?v=1`)
+assert.equal(res.status, 302, 'old versions are not shared with the team')
+res = await view(owner, `/a/${id}`)
+assert.match(await res.text(), /pill team/, 'owner sees the team pill')
+res = await request(owner, `/a/${id}/visibility`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: BASE },
+    body: JSON.stringify({ visibility: 'private' }),
+})
+assert.equal(res.status, 200)
+res = await frame(other, teamFrame)
+assert.equal(res.status, 404, 'unsharing revokes outstanding team frame grants')
+res = await view(other, `/a/${id}`)
+assert.equal(res.status, 404)
+step('team: signed-in staff only, latest version only, revocable')
+
 // Share via the web UI endpoint (as the browser would)
 res = await request(owner, `/a/${id}/visibility`, {
     method: 'POST',

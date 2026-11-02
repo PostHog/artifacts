@@ -19,6 +19,7 @@ Browser ─────────────▶ │ /a/:id          viewer: P
 - **Links:** `/a/<22 base62 chars>`, about 131 bits of randomness, so links can't be guessed or enumerated. Every response sends `noindex` and `Referrer-Policy`, so links don't leak through search engines or referrers.
 - **Sharing:**
   - **Private** (the default): only the owner can view. Everyone else gets a 404, so they can't tell the artifact exists.
+  - **PostHog team:** anyone signed in with a verified `@posthog.com` account sees the **latest** version. Signed-out visitors are sent to sign in, exactly as for a private artifact, so a leaked team link reveals nothing. Team links get no link-preview tags.
   - **Public with link:** anyone with the link sees the **latest** version.
   - Older versions are only ever visible to the owner.
   - Unsharing, or publishing a new version, revokes iframe grants that are already open.
@@ -29,10 +30,10 @@ Browser ─────────────▶ │ /a/:id          viewer: P
 
 | Tool | Purpose |
 |---|---|
-| `publish_artifact` | Create an artifact (HTML or Markdown), or add a version with `artifact_id`. Private unless `visibility: "public"`. |
+| `publish_artifact` | Create an artifact (HTML or Markdown), or add a version with `artifact_id`. Private unless `visibility` is `"team"` or `"public"`. |
 | `list_artifacts` | Your artifacts, newest first. |
 | `get_artifact` | Metadata, version history, and optionally a version's content. |
-| `set_visibility` | `private` or `public`. |
+| `set_visibility` | `private`, `team` or `public`. |
 | `update_artifact` | Rename or change the description. |
 | `delete_artifact` | Permanent delete. |
 
