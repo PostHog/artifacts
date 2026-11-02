@@ -25,5 +25,6 @@ export interface User {
     name: string
 }
 
-export type Visibility = 'private' | 'public'
+/** private: owner only. team: any signed-in PostHog staff member. public: anyone with the link. */
+export type Visibility = 'private' | 'team' | 'public'
 export type Format = 'html' | 'markdown'

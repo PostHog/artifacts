@@ -95,10 +95,14 @@ const expandIcon = raw(
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>'
 )
 
+const teamIcon = raw(
+    '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></svg>'
+)
+
 export function visibilityPill(visibility: Artifact['visibility']) {
-    return visibility === 'public'
-        ? html`<span class="pill public" data-visibility-pill>${globeIcon} Public</span>`
-        : html`<span class="pill" data-visibility-pill>${lockIcon} Private</span>`
+    if (visibility === 'public') return html`<span class="pill public" data-visibility-pill>${globeIcon} Public</span>`
+    if (visibility === 'team') return html`<span class="pill team" data-visibility-pill>${teamIcon} PostHog</span>`
+    return html`<span class="pill" data-visibility-pill>${lockIcon} Private</span>`
 }
 
 interface ViewerOptions {
@@ -142,6 +146,10 @@ export function viewerPage({ user, artifact, versions, version, owner, frameSrc,
           <span><strong>Private</strong><small>Only you can view this artifact.</small></span>
         </label>
         <label class="choice">
+          <input type="radio" name="visibility" value="team" ${artifact.visibility === 'team' ? 'checked' : ''}>
+          <span><strong>PostHog team</strong><small>Anyone signed in with a @posthog.com account can view the latest version. Signed-out visitors can't.</small></span>
+        </label>
+        <label class="choice">
           <input type="radio" name="visibility" value="public" ${artifact.visibility === 'public' ? 'checked' : ''}>
           <span><strong>Anyone with the link</strong><small>Anyone with the link can view the latest version. Links can't be guessed.</small></span>
         </label>
@@ -157,6 +165,7 @@ export function viewerPage({ user, artifact, versions, version, owner, frameSrc,
     const center = html`<h1 title="${artifact.title}">${artifact.title}</h1>
   ${versionPicker}
   ${owner ? visibilityPill(artifact.visibility) : ''}
+  ${owner ? (['private', 'team', 'public'] as const).map((v) => html`<template data-pill="${v}">${visibilityPill(v)}</template>`) : ''}
   <span class="meta">${owner ? 'Updated' : 'By ' + author + ' ·'} ${relativeTime(isLatest ? artifact.updated_at : version.created_at)}</span>`
 
     const actions = html`<button class="ghost hide-sm" type="button" data-fullscreen title="Full screen">${expandIcon}</button>

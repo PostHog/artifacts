@@ -1,4 +1,5 @@
 import init from '../../migrations/0001_init.sql'
+import teamVisibility from '../../migrations/0002_team_visibility.sql'
 
 /**
  * Schema migrations, applied by the Worker on first use in each isolate. Deploys are a plain
@@ -6,7 +7,10 @@ import init from '../../migrations/0001_init.sql'
  *
  * To change the schema, add migrations/000N_name.sql and append it here. Never edit an applied file.
  */
-const MIGRATIONS: [name: string, sql: string][] = [['0001_init', init]]
+const MIGRATIONS: [name: string, sql: string][] = [
+    ['0001_init', init],
+    ['0002_team_visibility', teamVisibility],
+]
 
 function statements(sql: string): string[] {
     return sql
