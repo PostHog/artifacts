@@ -68,20 +68,17 @@ function fail(error: unknown) {
 export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext, 'waitUntil'>): McpServer {
     const server = new McpServer({ name: 'posthog-artifacts', version: '1.0.0' }, { instructions: INSTRUCTIONS })
 
-    /**
-     * Wraps a tool body so store errors become MCP tool errors instead of protocol failures,
-     * and records every call (and its outcome) as an `artifacts mcp tool called` event.
-     */
+    /** Wraps a tool body so store errors become MCP tool errors instead of protocol failures, and tracks the call. */
     const guarded =
         <A>(tool: string, fn: (args: A) => Promise<object>) =>
         async (args: A) => {
             try {
                 const result = ok(await fn(args))
-                track(env, ctx, 'artifacts mcp tool called', user, { tool, success: true })
+                track(env, ctx, 'artifacts mcp tool called', user, { tool, is_successful: true })
                 return result
             } catch (error) {
                 const error_code = error instanceof StoreError ? error.code : 'internal'
-                track(env, ctx, 'artifacts mcp tool called', user, { tool, success: false, error_code })
+                track(env, ctx, 'artifacts mcp tool called', user, { tool, is_successful: false, error_code })
                 return fail(error)
             }
         }
@@ -205,8 +202,8 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
             const artifact = await updateMetadata(env, user, artifact_id, { title, description })
             track(env, ctx, 'artifact details updated', user, {
                 artifact_id,
-                changed_title: title !== undefined,
-                changed_description: description !== undefined,
+                is_title_changed: title !== undefined,
+                is_description_changed: description !== undefined,
                 source: 'mcp',
             })
             return describe(env, artifact)

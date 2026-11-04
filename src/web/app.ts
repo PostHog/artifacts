@@ -165,7 +165,7 @@ app.get('/authorize', async (c) => {
                 scope: request.scope.length ? request.scope : SCOPES,
                 props: user,
             })
-            track(c.env, c.executionCtx, 'artifacts mcp client connected', user, { client_id: request.clientId, remembered_consent: true })
+            track(c.env, c.executionCtx, 'artifacts mcp client connected', user, { client_id: request.clientId, is_consent_remembered: true })
             return c.redirect(redirectTo)
         }
         const details = await oauth.describeConsent(request)
@@ -200,7 +200,7 @@ app.post('/authorize', async (c) => {
             scope: approved.request.scope,
             props: user,
         })
-        track(c.env, c.executionCtx, 'artifacts mcp client connected', user, { client_id: approved.request.clientId, remembered_consent: false })
+        track(c.env, c.executionCtx, 'artifacts mcp client connected', user, { client_id: approved.request.clientId, is_consent_remembered: false })
         approved.headers.set('Location', redirectTo)
         return new Response(null, { status: 302, headers: approved.headers })
     } catch (error) {

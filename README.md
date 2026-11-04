@@ -96,22 +96,17 @@ See [SECURITY.md](SECURITY.md) for the threat model and the controls behind it.
 
 ## Usage analytics
 
-The Worker sends server-side events to PostHog's own project, [project 2](https://us.posthog.com/project/2) (`src/lib/analytics.ts`), so we can see who published, shared, viewed and deleted what. The project key and ingestion host are plain vars in `wrangler.jsonc`, since a project key is public. Set `POSTHOG_PROJECT_API_KEY` to `""` to turn analytics off.
-
-Project 2 also holds the PostHog app's events, so filter on `$lib = posthog-artifacts`. Leave "Filter out internal and test users" off: project 2's test-account filter drops `@posthog.com` people, which is everyone here.
+Server-side events go to [project 2](https://us.posthog.com/project/2) via `posthog-node` (`src/lib/analytics.ts`), set up per [PostHog's Cloudflare Workers docs](https://posthog.com/docs/libraries/cloudflare-workers). `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` are vars in `wrangler.jsonc`; an empty token turns analytics off. Local runs only send to a localhost `POSTHOG_HOST`.
 
 | Event | When | Key properties |
 |---|---|---|
-| `artifact published` | `publish_artifact` succeeds | `artifact_id`, `version`, `is_new_artifact`, `format`, `size_bytes`, `visibility` |
-| `artifact visibility changed` | `set_visibility` or the Share button | `artifact_id`, `visibility`, `source` (`mcp` / `web`) |
-| `artifact details updated` | `update_artifact` | `artifact_id`, `changed_title`, `changed_description` |
+| `artifact published` | `publish_artifact` | `artifact_id`, `version`, `is_new_artifact`, `format`, `size_bytes`, `visibility` |
+| `artifact visibility changed` | `set_visibility` or the Share button | `artifact_id`, `visibility`, `source` |
+| `artifact details updated` | `update_artifact` | `artifact_id`, `is_title_changed`, `is_description_changed` |
 | `artifact deleted` | `delete_artifact` | `artifact_id` |
-| `artifact viewed` | the viewer page loads | `artifact_id`, `artifact_owner`, `version`, `access` (`owner` / `team` / `public`), `signed_in` |
-| `artifacts mcp tool called` | every MCP tool call, including reads | `tool`, `success`, `error_code` |
-| `artifacts mcp client connected` | an MCP client finishes OAuth | `client_id`, `remembered_consent` |
-| `artifacts user signed in` | web sign-in completes | |
+| `artifact viewed` | viewer page loads | `artifact_id`, `artifact_owner`, `version`, `access` |
+| `artifacts mcp tool called` | every MCP tool call | `tool`, `is_successful`, `error_code` |
+| `artifacts mcp client connected` | MCP OAuth completes | `client_id`, `is_consent_remembered` |
+| `artifacts user signed in` | web sign-in | |
 
-- **Who:** signed-in people are identified by their `@posthog.com` email as the distinct ID. Signed-out viewers of public links get a one-off ID. No person profiles are created, so staff's existing project 2 profiles aren't duplicated.
-- **Local runs:** with a localhost `PUBLIC_URL`, events only go to a localhost `POSTHOG_CAPTURE_HOST`, so `pnpm dev` and `pnpm smoke` never reach project 2.
-- **Never sent:** artifact content, titles, descriptions, version notes, or a viewer's IP (GeoIP is off).
-- **Never in the way:** events are sent after the response (`waitUntil`), and a failed send is logged and dropped.
+Every event has `app = posthog-artifacts` and `is_signed_in`. Users are keyed by email with no person profiles (staff already have them in project 2). Content, titles, descriptions, notes and IPs are never sent. When querying, leave "Filter out internal and test users" off: it drops `@posthog.com` users.

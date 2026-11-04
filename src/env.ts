@@ -15,10 +15,9 @@ export interface AppEnv {
     POSTHOG_OAUTH_HOST: string
     /** Comma-separated https hosts MCP clients may redirect to, besides loopback. Default: claude.ai,claude.com */
     MCP_REDIRECT_HOSTS: string
-    /** Project API key for usage analytics (project 2, set in wrangler.jsonc). Empty = nothing is sent. See src/lib/analytics.ts. */
-    POSTHOG_PROJECT_API_KEY?: string
-    /** PostHog ingestion host for usage analytics. Default: https://us.i.posthog.com */
-    POSTHOG_CAPTURE_HOST?: string
+    /** Usage analytics (src/lib/analytics.ts). Empty token = off. */
+    POSTHOG_PROJECT_TOKEN?: string
+    POSTHOG_HOST?: string
     PUBLISH_LIMITER: RateLimit
     REGISTER_LIMITER: RateLimit
 }

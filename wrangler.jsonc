@@ -25,11 +25,9 @@
     "MCP_REDIRECT_HOSTS": "claude.ai,claude.com",
     // Only honoured when PUBLIC_URL is localhost, so it can't be switched on in production.
     "DEV_LOGIN": "false",
-    // Usage analytics (src/lib/analytics.ts) go to PostHog's own project, project 2. This is its public
-    // project key, the same one the PostHog app ships in its frontend. Set it to "" to turn analytics off.
-    // A localhost PUBLIC_URL only ever sends to a localhost capture host, so `pnpm dev` sends nothing.
-    "POSTHOG_PROJECT_API_KEY": "sTMFPsFhdP1Ssg",
-    "POSTHOG_CAPTURE_HOST": "https://us.i.posthog.com"
+    // Usage analytics go to project 2. Project tokens are public. "" turns analytics off.
+    "POSTHOG_PROJECT_TOKEN": "sTMFPsFhdP1Ssg",
+    "POSTHOG_HOST": "https://us.i.posthog.com"
   },
   // Provisioned by the first deploy, then pinned here so a Worker rename can't silently provision empty replacements.
   // The schema is applied by the Worker itself (src/lib/migrate.ts), so deploys need no migration step.
