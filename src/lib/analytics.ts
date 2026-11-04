@@ -2,6 +2,17 @@ import { PostHog } from 'posthog-node'
 import type { AppEnv, User } from '../env'
 import { isLocal } from './session'
 
+/** Every event this app sends. Add new ones here so names stay static. */
+export type AnalyticsEvent =
+    | 'artifact published'
+    | 'artifact visibility changed'
+    | 'artifact details updated'
+    | 'artifact deleted'
+    | 'artifact viewed'
+    | 'artifacts mcp tool called'
+    | 'artifacts mcp client connected'
+    | 'artifacts user signed in'
+
 type Properties = Record<string, string | number | boolean | null | undefined>
 
 const isLoopback = (url: string) => ['localhost', '127.0.0.1', '[::1]'].includes(URL.parse(url)?.hostname ?? '')
@@ -11,7 +22,7 @@ const isLoopback = (url: string) => ['localhost', '127.0.0.1', '[::1]'].includes
 export function track(
     env: AppEnv,
     ctx: Pick<ExecutionContext, 'waitUntil'>,
-    event: string,
+    event: AnalyticsEvent,
     user: User | null,
     properties: Properties = {}
 ): void {
