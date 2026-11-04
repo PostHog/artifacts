@@ -316,6 +316,125 @@ res = await view(owner, `/a/${id}`)
 assert.equal(res.status, 404)
 step('rename + delete')
 
+// --- Invited viewers (customers): allowlist + their own PostHog account -------------
+// The real sign-in goes through PostHog, so the smoke test uses the local-only /login/dev-guest stand-in,
+// which sets the same guest cookie the OAuth callback does for any address.
+const form = (jar, path, fields, headers = {}) =>
+    request(jar, path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: BASE, ...headers }, body: new URLSearchParams(fields) })
+const guestLogin = async (email) => {
+    const jar = new Jar()
+    res = await form(jar, '/login/dev-guest', { email })
+    assert.equal(res.status, 302)
+    assert.ok(jar.cookies.get('guest'), 'guest cookie set')
+    return jar
+}
+
+let r = await mcp('tools/call', { name: 'publish_artifact', arguments: { title: 'No list', format: 'html', content: '<p>x</p>', visibility: 'invited' } })
+assert.ok(r.isError, 'invited needs a list')
+const inv = await call('publish_artifact', {
+    title: 'Customer doc',
+    format: 'html',
+    content: '<!doctype html><h1>For Acme</h1>',
+    visibility: 'invited',
+    invited_emails: ['ana@acme.com', '@globex.com', 'ANA@acme.com'],
+})
+assert.equal(inv.visibility, 'invited')
+assert.deepEqual([...inv.invited_emails].sort(), ['@globex.com', 'ana@acme.com'], 'list is normalised and de-duplicated')
+r = await mcp('tools/call', { name: 'set_visibility', arguments: { artifact_id: inv.id, visibility: 'invited', invited_emails: ['@gmail.com'] } })
+assert.ok(r.isError, 'consumer domains cannot be allowlisted')
+r = await mcp('tools/call', { name: 'set_visibility', arguments: { artifact_id: inv.id, visibility: 'invited', invited_emails: ['not an email'] } })
+assert.ok(r.isError, 'malformed entries are refused')
+step('invited: owner sets an allowlist; consumer domains and junk are refused')
+
+// The gate looks the same to everyone and says nothing about the artifact.
+for (const jar of [anon, other]) {
+    res = await view(jar, `/a/${inv.id}`)
+    assert.equal(res.status, 200)
+    const gate = await res.text()
+    assert.match(gate, /Sign in to view this document/)
+    assert.match(gate, new RegExp(`/a/${inv.id}/signin/eu`))
+    assert.ok(!gate.includes('Customer doc') && !gate.includes('<iframe') && !gate.includes('og:title'), 'gate leaks nothing')
+}
+res = await view(anon, `/a/${inv.id}/signin/mars`)
+assert.equal(res.status, 404, 'unknown region refused')
+step('invited: gate shows nothing about the artifact (anonymous or signed-in staff)')
+
+// Signed in as a PostHog user who is NOT on the list: same gate, no access.
+const stranger = await guestLogin('stranger@example.com')
+res = await view(stranger, `/a/${inv.id}`)
+assert.match(await res.text(), /Sign in to view this document/, 'a PostHog account alone is not enough')
+res = await frame(stranger, `/c/${inv.id}/1?t=forged`)
+assert.equal(res.status, 403)
+step('invited: having a PostHog account is not access; the allowlist decides')
+
+// Exact address.
+const ana = await guestLogin('ana@acme.com')
+res = await view(ana, `/a/${inv.id}`)
+assert.equal(res.status, 200)
+const guestHtml = await res.text()
+assert.ok(!guestHtml.includes('data-share-form') && !guestHtml.includes('Version history'), 'no management UI for guests')
+assert.ok(!guestHtml.includes('og:title'), 'invited artifacts are never unfurled')
+const guestFrame = await frameOf(await view(ana, `/a/${inv.id}`))
+res = await frame(ana, guestFrame)
+assert.equal(res.status, 200)
+assert.match(await res.text(), /For Acme/)
+res = await view(ana, `/a/${inv.id}?v=1`)
+assert.equal(res.status, 200, 'latest version still served')
+step('invited: allowlisted address → access, latest version only')
+
+// A guest is not a staff user.
+res = await request(ana, '/')
+assert.match(await res.text(), /Sign in with PostHog/, 'guest cookie is not a staff session')
+const asSession = new Jar()
+asSession.cookies.set('session', ana.cookies.get('guest'))
+res = await request(asSession, '/')
+assert.match(await res.text(), /Sign in with PostHog/, 'guest token cannot be replayed as a session')
+res = await request(ana, `/a/${id}/visibility`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: BASE }, body: JSON.stringify({ visibility: 'public' }) })
+assert.equal(res.status, 401, 'guests cannot manage sharing')
+const other2 = await call('publish_artifact', { title: 'Other invited', format: 'html', content: '<h1>Other</h1>', visibility: 'invited', invited_emails: ['someone@else.com'] })
+res = await view(ana, `/a/${other2.id}`)
+assert.match(await res.text(), /Sign in to view this document/, 'allowlists are per artifact')
+await call('delete_artifact', { artifact_id: other2.id })
+step('invited: guests are not staff; allowlists are per artifact')
+
+// Domain entry: anyone at globex.com, but not lookalikes.
+const bob = await guestLogin('bob@globex.com')
+res = await view(bob, `/a/${inv.id}`)
+assert.equal(res.status, 200, 'domain entries admit people at that domain')
+for (const email of ['eve@evilglobex.com', 'eve@globex.com.evil.example', 'eve@sub.globex.com']) {
+    const jar = await guestLogin(email)
+    res = await view(jar, `/a/${inv.id}`)
+    assert.match(await res.text(), /Sign in to view this document/, `${email} is not on the list`)
+}
+step('invited: @domain entries match the domain exactly')
+
+// Allowlist edits and unsharing take effect on open grants immediately.
+await call('set_visibility', { artifact_id: inv.id, visibility: 'invited', invited_emails: ['@globex.com'] })
+res = await frame(ana, guestFrame)
+assert.equal(res.status, 404, 'removing an address revokes their open frame grant')
+res = await view(ana, `/a/${inv.id}`)
+assert.match(await res.text(), /Sign in to view this document/, 'and sends them back to the gate')
+res = await view(bob, `/a/${inv.id}`)
+assert.equal(res.status, 200, 'others on the list are unaffected')
+const bobFrame = await frameOf(await view(bob, `/a/${inv.id}`))
+await call('publish_artifact', { artifact_id: inv.id, format: 'html', content: '<h1>For Acme v2</h1>' })
+res = await frame(bob, bobFrame)
+assert.equal(res.status, 404, 'a new version supersedes open grants')
+const bobFrame2 = await frameOf(await view(bob, `/a/${inv.id}`))
+await call('set_visibility', { artifact_id: inv.id, visibility: 'private' })
+res = await frame(bob, bobFrame2)
+assert.equal(res.status, 404, 'unsharing revokes open grants')
+res = await view(bob, `/a/${inv.id}`)
+assert.equal(res.status, 302, 'private again: indistinguishable from missing')
+await call('set_visibility', { artifact_id: inv.id, visibility: 'invited' })
+res = await view(bob, `/a/${inv.id}`)
+assert.equal(res.status, 200, 'the list survives a switch away and back')
+res = await request(bob, `/a/${inv.id}/signout`, { method: 'POST', headers: { Origin: BASE } })
+res = await view(bob, `/a/${inv.id}`)
+assert.match(await res.text(), /Sign in to view this document/, 'sign out ends the guest session')
+await call('delete_artifact', { artifact_id: inv.id })
+step('invited: allowlist edits, new versions, unsharing and sign-out all take effect immediately')
+
 // --- Security regressions ---------------------------------------------------
 // Open redirect: browsers strip tabs, so /<TAB>/evil.example would become //evil.example
 res = await request(owner, '/login?next=/%09/evil.example')

@@ -13,6 +13,7 @@ import {
     getOwnedArtifact,
     getVersion,
     listArtifacts,
+    listInvites,
     listVersions,
     publish,
     setVisibility,
@@ -21,15 +22,19 @@ import {
 } from './store'
 
 const INSTRUCTIONS = `PostHog Artifacts hosts finished content (reports, write-ups, HTML pages, Markdown docs) at artifacts.posthog.com.
-Every artifact has an unguessable link. New artifacts are private (only the owner can see them). Visibility "team" makes the latest version viewable by anyone signed in with a @posthog.com account (signed-out visitors are asked to sign in). Visibility "public" makes it viewable by anyone with the link, including people outside PostHog. When the user says to share with colleagues or the team, use "team"; use "public" only when they want it viewable outside PostHog.
+Every artifact has an unguessable link. New artifacts are private (only the owner can see them). Visibility "team" makes the latest version viewable by anyone signed in with a @posthog.com account (signed-out visitors are asked to sign in). Visibility "invited" makes it viewable only by the emails or company domains in invited_emails: they sign in with their own PostHog account and must be on the list. Use it for customers. Visibility "public" makes it viewable by anyone with the link, including people outside PostHog. When the user says to share with colleagues or the team, use "team". When they want specific outside people (a customer) to see it, use "invited" with their addresses; use "public" only when anyone with the link should see it.
 Publishing again with an artifact_id adds a new version; only the latest version is ever shared. Prefer updating an existing artifact over creating duplicates.`
 
 const artifactId = z.string().regex(/^[0-9A-Za-z]{22}$/).describe('The artifact ID (the last part of its URL)')
 const visibility = z
-    .enum(['private', 'team', 'public'])
+    .enum(['private', 'team', 'invited', 'public'])
     .describe(
-        '"private": only you can view it. "team": anyone signed in with a @posthog.com account can view the latest version. "public": anyone with the link, including people outside PostHog, can view the latest version.'
+        '"private": only you can view it. "team": anyone signed in with a @posthog.com account can view the latest version. "invited": only the emails or company domains in invited_emails, who sign in with their own PostHog account. "public": anyone with the link, including people outside PostHog, can view the latest version.'
     )
+const invitedEmails = z
+    .array(z.string().max(254))
+    .max(50)
+    .describe('Who may view an "invited" artifact: exact emails (ana@acme.com) or a whole company domain (@acme.com). Replaces the current list. Consumer domains like @gmail.com are refused.')
 
 function describe(env: AppEnv, artifact: Artifact) {
     return {
@@ -42,6 +47,11 @@ function describe(env: AppEnv, artifact: Artifact) {
         created_at: new Date(artifact.created_at).toISOString(),
         updated_at: new Date(artifact.updated_at).toISOString(),
     }
+}
+
+/** describe(), plus the allowlist for invited artifacts (owner-only views, so it is safe to include). */
+async function describeWithInvites(env: AppEnv, artifact: Artifact) {
+    return artifact.visibility === 'invited' ? { ...describe(env, artifact), invited_emails: await listInvites(env, artifact.id) } : describe(env, artifact)
 }
 
 function describeVersion(version: Version) {
@@ -91,6 +101,7 @@ export function buildServer(env: AppEnv, user: User): McpServer {
                 artifact_id: artifactId.optional(),
                 note: z.string().max(500).optional().describe('What changed in this version'),
                 visibility: visibility.optional(),
+                invited_emails: invitedEmails.optional(),
             }),
             annotations: { destructiveHint: false, idempotentHint: false },
         },
@@ -105,8 +116,9 @@ export function buildServer(env: AppEnv, user: User): McpServer {
                 format: args.format,
                 note: args.note,
                 visibility: args.visibility,
+                invited: args.invited_emails,
             })
-            return { ...describe(env, artifact), version: describeVersion(version) }
+            return { ...(await describeWithInvites(env, artifact)), version: describeVersion(version) }
         })
     )
 
@@ -151,7 +163,7 @@ export function buildServer(env: AppEnv, user: User): McpServer {
                 if (!selected) throw new StoreError('not_found', `Version ${version} not found`)
                 content = (await getContent(env, selected)) ?? undefined
             }
-            return { ...describe(env, artifact), versions: versions.map(describeVersion), content }
+            return { ...(await describeWithInvites(env, artifact)), versions: versions.map(describeVersion), content }
         })
     )
 
@@ -160,11 +172,13 @@ export function buildServer(env: AppEnv, user: User): McpServer {
         {
             title: 'Share or unshare artifact',
             description:
-                'Change who can view an artifact. "team" makes the latest version viewable by anyone signed in with a @posthog.com account; "public" makes it viewable by anyone with the link; "private" restricts it to you. Older versions are never shared.',
-            inputSchema: z.object({ artifact_id: artifactId, visibility }),
+                'Change who can view an artifact. "team" makes the latest version viewable by anyone signed in with a @posthog.com account; "invited" makes it viewable by the people in invited_emails (customers, who sign in with their own PostHog account); "public" makes it viewable by anyone with the link; "private" restricts it to you. Older versions are never shared.',
+            inputSchema: z.object({ artifact_id: artifactId, visibility, invited_emails: invitedEmails.optional() }),
             annotations: { idempotentHint: true },
         },
-        guarded(async ({ artifact_id, visibility }) => describe(env, await setVisibility(env, user, artifact_id, visibility)))
+        guarded(async ({ artifact_id, visibility, invited_emails }) =>
+            describeWithInvites(env, await setVisibility(env, user, artifact_id, visibility, invited_emails))
+        )
     )
 
     server.registerTool(

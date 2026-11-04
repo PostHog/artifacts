@@ -38,18 +38,22 @@
     }
 
     let current = form?.querySelector('input:checked')?.value
+    const inviteBox = form?.querySelector('[data-invite-box]')
+    const inviteList = form?.querySelector('[data-invite-list]')
 
-    form?.addEventListener('change', async (event) => {
-        const visibility = event.target.value
-        const inputs = [...form.querySelectorAll('input')]
+    // Applies a visibility change. `invited` (an array) only accompanies "Specific people".
+    const apply = async (visibility, invited) => {
+        const inputs = [...form.querySelectorAll('input, textarea, button')]
         inputs.forEach((input) => (input.disabled = true))
         try {
             const response = await fetch(`/a/${form.dataset.artifact}/visibility`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ visibility }),
+                body: JSON.stringify(invited ? { visibility, invited } : { visibility }),
             })
             if (!response.ok) throw new Error(await response.text())
+            const saved = await response.json()
+            if (inviteList && saved.invited) inviteList.value = saved.invited.join('\n')
             const shared = visibility !== 'private'
             link.disabled = !shared
             copy.disabled = !shared
@@ -61,14 +65,32 @@
                 pill = next
             }
             current = visibility
+            if (inviteBox) inviteBox.hidden = visibility !== 'invited'
             if (shared) await copyLink()
             else notify('Only you can view this now')
-        } catch {
+        } catch (error) {
             form.querySelector(`input[value="${current}"]`).checked = true
-            notify("Couldn't update sharing. Try again.")
+            if (inviteBox) inviteBox.hidden = current !== 'invited'
+            notify(String(error?.message || '').length < 120 && error?.message ? error.message : "Couldn't update sharing. Try again.")
         } finally {
             inputs.forEach((input) => (input.disabled = false))
         }
+    }
+
+    form?.addEventListener('change', (event) => {
+        if (event.target.name !== 'visibility') return
+        // "Specific people" needs a list first: reveal the box and wait for Save.
+        if (event.target.value === 'invited') {
+            inviteBox.hidden = false
+            inviteList.focus()
+            return
+        }
+        apply(event.target.value)
+    })
+    form?.querySelector('[data-invite-save]')?.addEventListener('click', () => {
+        const invited = inviteList.value.split(/[\s,;]+/).filter(Boolean)
+        if (!invited.length) return notify('Add at least one email or domain')
+        apply('invited', invited)
     })
     copy?.addEventListener('click', copyLink)
 
