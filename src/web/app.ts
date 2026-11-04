@@ -1,6 +1,7 @@
 import { AuthorizationError, CimdFetchError } from '@cloudflare/workers-oauth-provider'
 import { Hono, type Context } from 'hono'
 import type { AppEnv, User } from '../env'
+import { track } from '../lib/analytics'
 import { deriveSecret } from '../lib/crypto'
 import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/policy'
 import { LoginError, beginPostHogLogin, clientMetadata, finishPostHogLogin, loginErrorMessage } from '../lib/posthog-oauth'
@@ -89,6 +90,7 @@ app.get('/auth/posthog', async (c) => {
 app.get('/auth/posthog/callback', async (c) => {
     try {
         const { user, next } = await finishPostHogLogin(c.env, c.req.raw)
+        track(c.env, c.executionCtx, 'user signed in', user, { source: 'web' })
         c.header('Set-Cookie', await sessionCookie(c.env, user))
         // The login state is single-use.
         c.header('Set-Cookie', serializeCookie(c.env, 'login', '', 0), { append: true })
@@ -163,6 +165,7 @@ app.get('/authorize', async (c) => {
                 scope: request.scope.length ? request.scope : SCOPES,
                 props: user,
             })
+            track(c.env, c.executionCtx, 'mcp client connected', user, { client_id: request.clientId, remembered_consent: true })
             return c.redirect(redirectTo)
         }
         const details = await oauth.describeConsent(request)
@@ -197,6 +200,7 @@ app.post('/authorize', async (c) => {
             scope: approved.request.scope,
             props: user,
         })
+        track(c.env, c.executionCtx, 'mcp client connected', user, { client_id: approved.request.clientId, remembered_consent: false })
         approved.headers.set('Location', redirectTo)
         return new Response(null, { status: 302, headers: approved.headers })
     } catch (error) {
@@ -227,6 +231,18 @@ app.get('/a/:id', async (c) => {
     const version = Number.isInteger(requested) ? await getVersion(c.env, artifact.id, requested) : null
     if (!version) return owner ? c.redirect(`/a/${artifact.id}`) : notFound(c)
 
+    const access = owner ? 'owner' : artifact.visibility === 'team' ? 'team' : 'public'
+    track(c.env, c.executionCtx, 'artifact viewed', user, {
+        artifact_id: artifact.id,
+        artifact_owner: artifact.owner_email,
+        version: version.version,
+        is_latest_version: version.version === artifact.latest_version,
+        format: version.format,
+        visibility: artifact.visibility,
+        access,
+        signed_in: !!user,
+    })
+
     return c.html(
         viewerPage({
             user,
@@ -234,7 +250,7 @@ app.get('/a/:id', async (c) => {
             versions: owner ? await listVersions(c.env, artifact.id, 100) : [],
             version,
             owner,
-            frameSrc: await frameUrl(c.env, artifact.id, version.version, owner ? 'owner' : artifact.visibility === 'team' ? 'team' : 'public'),
+            frameSrc: await frameUrl(c.env, artifact.id, version.version, access),
             shareUrl: shareUrl(c.env, artifact.id),
         })
     )
@@ -250,6 +266,7 @@ app.post('/a/:id/visibility', async (c) => {
     }
     try {
         const artifact = await setVisibility(c.env, user, c.req.param('id'), visibility)
+        track(c.env, c.executionCtx, 'artifact visibility changed', user, { artifact_id: artifact.id, visibility, source: 'web' })
         return c.json({ id: artifact.id, visibility: artifact.visibility, url: shareUrl(c.env, artifact.id) })
     } catch (error) {
         if (error instanceof StoreError) return c.text('Not found', 404)

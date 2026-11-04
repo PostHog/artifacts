@@ -81,6 +81,7 @@ Nothing needs to be created by hand.
    - Node and pnpm versions come from `.node-version` and `packageManager`.
 2. **Set the runtime secrets** under Worker → Settings → Variables & Secrets. Until `SESSION_SECRET` is set, the Worker serves a "not configured yet" page.
    - `SESSION_SECRET`: `openssl rand -hex 32`
+   - `POSTHOG_PROJECT_API_KEY` (optional): the `phc_…` key of the PostHog project that should receive usage analytics. Leave it unset and nothing is sent. See [Usage analytics](#usage-analytics).
 3. **Domain.** `wrangler.jsonc` attaches `artifacts.posthog.com` as a Custom Domain on deploy. This needs the `posthog.com` zone in the same Cloudflare account. If it isn't, remove the `routes` entry, test on the `*.workers.dev` URL by setting `PUBLIC_URL` to it, then add the domain once DNS is ready.
 4. Push to `main`. Every push after that deploys automatically.
 
@@ -93,3 +94,22 @@ pnpm wrangler kv key put --binding OAUTH_KV --remote revoked:someone@posthog.com
 ```
 
 See [SECURITY.md](SECURITY.md) for the threat model and the controls behind it.
+
+## Usage analytics
+
+When `POSTHOG_PROJECT_API_KEY` is set, the Worker sends server-side events to PostHog (`src/lib/analytics.ts`), so we can see who published, shared, viewed and deleted what. `POSTHOG_CAPTURE_HOST` overrides the ingestion host (default `https://us.i.posthog.com`).
+
+| Event | When | Key properties |
+|---|---|---|
+| `artifact published` | `publish_artifact` succeeds | `artifact_id`, `version`, `is_new_artifact`, `format`, `size_bytes`, `visibility` |
+| `artifact visibility changed` | `set_visibility` or the Share button | `artifact_id`, `visibility`, `source` (`mcp` / `web`) |
+| `artifact details updated` | `update_artifact` | `artifact_id`, `changed_title`, `changed_description` |
+| `artifact deleted` | `delete_artifact` | `artifact_id` |
+| `artifact viewed` | the viewer page loads | `artifact_id`, `artifact_owner`, `version`, `access` (`owner` / `team` / `public`), `signed_in` |
+| `mcp tool called` | every MCP tool call, including reads | `tool`, `success`, `error_code` |
+| `mcp client connected` | an MCP client finishes OAuth | `client_id`, `remembered_consent` |
+| `user signed in` | web sign-in completes | |
+
+- **Who:** signed-in people are identified by their `@posthog.com` email, with `email` and `name` set on the person. Signed-out viewers of public links get a one-off ID and no person profile.
+- **Never sent:** artifact content, titles, descriptions, version notes, or a viewer's IP (GeoIP is off).
+- **Never in the way:** events are sent after the response (`waitUntil`), and a failed send is logged and dropped.

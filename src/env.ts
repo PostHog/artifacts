@@ -15,6 +15,10 @@ export interface AppEnv {
     POSTHOG_OAUTH_HOST: string
     /** Comma-separated https hosts MCP clients may redirect to, besides loopback. Default: claude.ai,claude.com */
     MCP_REDIRECT_HOSTS: string
+    /** Project API key (phc_…) for usage analytics. Unset = no analytics are sent. See src/lib/analytics.ts. */
+    POSTHOG_PROJECT_API_KEY?: string
+    /** PostHog ingestion host for usage analytics. Default: https://us.i.posthog.com */
+    POSTHOG_CAPTURE_HOST?: string
     PUBLISH_LIMITER: RateLimit
     REGISTER_LIMITER: RateLimit
 }

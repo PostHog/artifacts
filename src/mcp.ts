@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/server'
 import { createMcpHandler } from 'agents/mcp/server'
 import { z } from 'zod'
 import type { AppEnv, User } from './env'
+import { track } from './lib/analytics'
 import { isAllowedEmail, isRevoked } from './lib/session'
 import {
     type Artifact,
@@ -64,19 +65,26 @@ function fail(error: unknown) {
     return { content: [{ type: 'text' as const, text: message }], isError: true }
 }
 
-/** Wraps a tool body so store errors become MCP tool errors instead of protocol failures. */
-function guarded<A>(fn: (args: A) => Promise<object>) {
-    return async (args: A) => {
-        try {
-            return ok(await fn(args))
-        } catch (error) {
-            return fail(error)
-        }
-    }
-}
-
-export function buildServer(env: AppEnv, user: User): McpServer {
+export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext, 'waitUntil'>): McpServer {
     const server = new McpServer({ name: 'posthog-artifacts', version: '1.0.0' }, { instructions: INSTRUCTIONS })
+
+    /**
+     * Wraps a tool body so store errors become MCP tool errors instead of protocol failures,
+     * and records every call (and its outcome) as an `mcp tool called` event.
+     */
+    const guarded =
+        <A>(tool: string, fn: (args: A) => Promise<object>) =>
+        async (args: A) => {
+            try {
+                const result = ok(await fn(args))
+                track(env, ctx, 'mcp tool called', user, { tool, success: true })
+                return result
+            } catch (error) {
+                const error_code = error instanceof StoreError ? error.code : 'internal'
+                track(env, ctx, 'mcp tool called', user, { tool, success: false, error_code })
+                return fail(error)
+            }
+        }
 
     server.registerTool(
         'publish_artifact',
@@ -94,7 +102,7 @@ export function buildServer(env: AppEnv, user: User): McpServer {
             }),
             annotations: { destructiveHint: false, idempotentHint: false },
         },
-        guarded(async (args) => {
+        guarded('publish_artifact', async (args) => {
             const { success } = await env.PUBLISH_LIMITER.limit({ key: user.email })
             if (!success) throw new StoreError('invalid', 'Too many publishes in the last minute; wait a moment and retry')
             const { artifact, version } = await publish(env, user, {
@@ -105,6 +113,16 @@ export function buildServer(env: AppEnv, user: User): McpServer {
                 format: args.format,
                 note: args.note,
                 visibility: args.visibility,
+            })
+            track(env, ctx, 'artifact published', user, {
+                artifact_id: artifact.id,
+                version: version.version,
+                is_new_artifact: !args.artifact_id,
+                format: version.format,
+                size_bytes: version.size,
+                visibility: artifact.visibility,
+                has_note: !!args.note,
+                source: 'mcp',
             })
             return { ...describe(env, artifact), version: describeVersion(version) }
         })
@@ -121,7 +139,7 @@ export function buildServer(env: AppEnv, user: User): McpServer {
             }),
             annotations: { readOnlyHint: true },
         },
-        guarded(async ({ limit, updated_before }) => {
+        guarded('list_artifacts', async ({ limit, updated_before }) => {
             const artifacts = await listArtifacts(env, user, {
                 limit,
                 before: updated_before ? Date.parse(updated_before) : undefined,
@@ -142,7 +160,7 @@ export function buildServer(env: AppEnv, user: User): McpServer {
             }),
             annotations: { readOnlyHint: true },
         },
-        guarded(async ({ artifact_id, version, include_content }) => {
+        guarded('get_artifact', async ({ artifact_id, version, include_content }) => {
             const artifact = await getOwnedArtifact(env, artifact_id, user)
             const versions = await listVersions(env, artifact.id)
             let content: string | undefined
@@ -164,7 +182,11 @@ export function buildServer(env: AppEnv, user: User): McpServer {
             inputSchema: z.object({ artifact_id: artifactId, visibility }),
             annotations: { idempotentHint: true },
         },
-        guarded(async ({ artifact_id, visibility }) => describe(env, await setVisibility(env, user, artifact_id, visibility)))
+        guarded('set_visibility', async ({ artifact_id, visibility }) => {
+            const artifact = await setVisibility(env, user, artifact_id, visibility)
+            track(env, ctx, 'artifact visibility changed', user, { artifact_id, visibility, source: 'mcp' })
+            return describe(env, artifact)
+        })
     )
 
     server.registerTool(
@@ -179,9 +201,16 @@ export function buildServer(env: AppEnv, user: User): McpServer {
             }),
             annotations: { idempotentHint: true },
         },
-        guarded(async ({ artifact_id, title, description }) =>
-            describe(env, await updateMetadata(env, user, artifact_id, { title, description }))
-        )
+        guarded('update_artifact', async ({ artifact_id, title, description }) => {
+            const artifact = await updateMetadata(env, user, artifact_id, { title, description })
+            track(env, ctx, 'artifact details updated', user, {
+                artifact_id,
+                changed_title: title !== undefined,
+                changed_description: description !== undefined,
+                source: 'mcp',
+            })
+            return describe(env, artifact)
+        })
     )
 
     server.registerTool(
@@ -192,8 +221,9 @@ export function buildServer(env: AppEnv, user: User): McpServer {
             inputSchema: z.object({ artifact_id: artifactId }),
             annotations: { destructiveHint: true },
         },
-        guarded(async ({ artifact_id }) => {
+        guarded('delete_artifact', async ({ artifact_id }) => {
             await deleteArtifact(env, user, artifact_id)
+            track(env, ctx, 'artifact deleted', user, { artifact_id, source: 'mcp' })
             return { deleted: artifact_id }
         })
     )
@@ -211,7 +241,7 @@ export const mcpApiHandler = {
             return Response.json({ error: 'access_revoked' }, { status: 403 })
         }
         const user: User = { email: props.email, name: typeof props.name === 'string' ? props.name : props.email }
-        const handler = createMcpHandler(() => buildServer(env, user), { route: '/mcp', maxRequestBodySize: MAX_REQUEST_BYTES })
+        const handler = createMcpHandler(() => buildServer(env, user, ctx), { route: '/mcp', maxRequestBodySize: MAX_REQUEST_BYTES })
 
         // agents' protocol-era check and legacy (2025-era) handler both read the body with the SDK's 4 MB
         // default, ignoring maxRequestBodySize, which breaks publishing anything near MAX_CONTENT_BYTES.
