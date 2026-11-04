@@ -81,7 +81,6 @@ Nothing needs to be created by hand.
    - Node and pnpm versions come from `.node-version` and `packageManager`.
 2. **Set the runtime secrets** under Worker → Settings → Variables & Secrets. Until `SESSION_SECRET` is set, the Worker serves a "not configured yet" page.
    - `SESSION_SECRET`: `openssl rand -hex 32`
-   - `POSTHOG_PROJECT_API_KEY` (optional): the `phc_…` key of the PostHog project that should receive usage analytics. Leave it unset and nothing is sent. See [Usage analytics](#usage-analytics).
 3. **Domain.** `wrangler.jsonc` attaches `artifacts.posthog.com` as a Custom Domain on deploy. This needs the `posthog.com` zone in the same Cloudflare account. If it isn't, remove the `routes` entry, test on the `*.workers.dev` URL by setting `PUBLIC_URL` to it, then add the domain once DNS is ready.
 4. Push to `main`. Every push after that deploys automatically.
 
@@ -97,7 +96,9 @@ See [SECURITY.md](SECURITY.md) for the threat model and the controls behind it.
 
 ## Usage analytics
 
-When `POSTHOG_PROJECT_API_KEY` is set, the Worker sends server-side events to PostHog (`src/lib/analytics.ts`), so we can see who published, shared, viewed and deleted what. `POSTHOG_CAPTURE_HOST` overrides the ingestion host (default `https://us.i.posthog.com`).
+The Worker sends server-side events to PostHog's own project, [project 2](https://us.posthog.com/project/2) (`src/lib/analytics.ts`), so we can see who published, shared, viewed and deleted what. The project key and ingestion host are plain vars in `wrangler.jsonc`, since a project key is public. Set `POSTHOG_PROJECT_API_KEY` to `""` to turn analytics off.
+
+Project 2 also holds the PostHog app's events, so filter on `$lib = posthog-artifacts`. Leave "Filter out internal and test users" off: project 2's test-account filter drops `@posthog.com` people, which is everyone here.
 
 | Event | When | Key properties |
 |---|---|---|
@@ -106,10 +107,11 @@ When `POSTHOG_PROJECT_API_KEY` is set, the Worker sends server-side events to Po
 | `artifact details updated` | `update_artifact` | `artifact_id`, `changed_title`, `changed_description` |
 | `artifact deleted` | `delete_artifact` | `artifact_id` |
 | `artifact viewed` | the viewer page loads | `artifact_id`, `artifact_owner`, `version`, `access` (`owner` / `team` / `public`), `signed_in` |
-| `mcp tool called` | every MCP tool call, including reads | `tool`, `success`, `error_code` |
-| `mcp client connected` | an MCP client finishes OAuth | `client_id`, `remembered_consent` |
-| `user signed in` | web sign-in completes | |
+| `artifacts mcp tool called` | every MCP tool call, including reads | `tool`, `success`, `error_code` |
+| `artifacts mcp client connected` | an MCP client finishes OAuth | `client_id`, `remembered_consent` |
+| `artifacts user signed in` | web sign-in completes | |
 
-- **Who:** signed-in people are identified by their `@posthog.com` email, with `email` and `name` set on the person. Signed-out viewers of public links get a one-off ID and no person profile.
+- **Who:** signed-in people are identified by their `@posthog.com` email as the distinct ID. Signed-out viewers of public links get a one-off ID. No person profiles are created, so staff's existing project 2 profiles aren't duplicated.
+- **Local runs:** with a localhost `PUBLIC_URL`, events only go to a localhost `POSTHOG_CAPTURE_HOST`, so `pnpm dev` and `pnpm smoke` never reach project 2.
 - **Never sent:** artifact content, titles, descriptions, version notes, or a viewer's IP (GeoIP is off).
 - **Never in the way:** events are sent after the response (`waitUntil`), and a failed send is logged and dropped.

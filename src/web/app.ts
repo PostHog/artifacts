@@ -90,7 +90,7 @@ app.get('/auth/posthog', async (c) => {
 app.get('/auth/posthog/callback', async (c) => {
     try {
         const { user, next } = await finishPostHogLogin(c.env, c.req.raw)
-        track(c.env, c.executionCtx, 'user signed in', user, { source: 'web' })
+        track(c.env, c.executionCtx, 'artifacts user signed in', user, { source: 'web' })
         c.header('Set-Cookie', await sessionCookie(c.env, user))
         // The login state is single-use.
         c.header('Set-Cookie', serializeCookie(c.env, 'login', '', 0), { append: true })
@@ -165,7 +165,7 @@ app.get('/authorize', async (c) => {
                 scope: request.scope.length ? request.scope : SCOPES,
                 props: user,
             })
-            track(c.env, c.executionCtx, 'mcp client connected', user, { client_id: request.clientId, remembered_consent: true })
+            track(c.env, c.executionCtx, 'artifacts mcp client connected', user, { client_id: request.clientId, remembered_consent: true })
             return c.redirect(redirectTo)
         }
         const details = await oauth.describeConsent(request)
@@ -200,7 +200,7 @@ app.post('/authorize', async (c) => {
             scope: approved.request.scope,
             props: user,
         })
-        track(c.env, c.executionCtx, 'mcp client connected', user, { client_id: approved.request.clientId, remembered_consent: false })
+        track(c.env, c.executionCtx, 'artifacts mcp client connected', user, { client_id: approved.request.clientId, remembered_consent: false })
         approved.headers.set('Location', redirectTo)
         return new Response(null, { status: 302, headers: approved.headers })
     } catch (error) {
@@ -240,7 +240,6 @@ app.get('/a/:id', async (c) => {
         format: version.format,
         visibility: artifact.visibility,
         access,
-        signed_in: !!user,
     })
 
     return c.html(

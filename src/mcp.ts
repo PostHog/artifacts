@@ -70,18 +70,18 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
 
     /**
      * Wraps a tool body so store errors become MCP tool errors instead of protocol failures,
-     * and records every call (and its outcome) as an `mcp tool called` event.
+     * and records every call (and its outcome) as an `artifacts mcp tool called` event.
      */
     const guarded =
         <A>(tool: string, fn: (args: A) => Promise<object>) =>
         async (args: A) => {
             try {
                 const result = ok(await fn(args))
-                track(env, ctx, 'mcp tool called', user, { tool, success: true })
+                track(env, ctx, 'artifacts mcp tool called', user, { tool, success: true })
                 return result
             } catch (error) {
                 const error_code = error instanceof StoreError ? error.code : 'internal'
-                track(env, ctx, 'mcp tool called', user, { tool, success: false, error_code })
+                track(env, ctx, 'artifacts mcp tool called', user, { tool, success: false, error_code })
                 return fail(error)
             }
         }
