@@ -456,6 +456,8 @@ res = await request(null, '/login?error=Email%20it-help%40evil.example%20now')
 assert.ok(!(await res.text()).includes('evil.example'), 'arbitrary error text is not reflected')
 res = await request(null, '/login?error=expired')
 assert.match(await res.text(), /sign-in link expired/)
+res = await request(null, '/login?error=not_allowed')
+assert.match(await res.text(), /open the link they sent you/, 'non-staff are pointed back to their document link')
 step('login errors are codes, not reflected text')
 
 res = await request(null, '/oauth/register', {

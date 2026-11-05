@@ -35,7 +35,7 @@ const LOGIN_ERRORS = {
     expired: 'Your sign-in link expired. Please try again.',
     cancelled: 'PostHog sign-in was cancelled.',
     failed: 'PostHog sign-in failed. Please try again.',
-    not_allowed: 'Only PostHog accounts with a verified company email can sign in.',
+    not_allowed: "This sign-in is for PostHog staff. If someone shared a document with you, open the link they sent you and sign in from there.",
     not_verified: "Your PostHog account's email address isn't verified yet. Verify it in PostHog, then try again.",
     revoked: 'Your access to Artifacts has been revoked.',
 } as const
