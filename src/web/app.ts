@@ -1,6 +1,7 @@
 import { AuthorizationError, CimdFetchError } from '@cloudflare/workers-oauth-provider'
 import { Hono, type Context } from 'hono'
 import type { AppEnv, User } from '../env'
+import { track } from '../lib/analytics'
 import type { Artifact } from '../store'
 import { deriveSecret } from '../lib/crypto'
 import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/policy'
@@ -93,6 +94,8 @@ app.get('/auth/posthog/callback', async (c) => {
     try {
         const result = await finishPostHogLogin(c.env, c.req.raw)
         // Staff get a session. Invited viewers get a guest cookie, which only opens artifacts that list them.
+        // Only staff sign-ins are tracked: guests are customers, and we don't send their emails to project 2.
+        if (result.kind === 'staff') track(c.env, c.executionCtx, 'artifacts user signed in', result.user, { source: 'web' })
         c.header('Set-Cookie', result.kind === 'staff' ? await sessionCookie(c.env, result.user) : await guestCookie(c.env, result.email))
         // The login state is single-use.
         c.header('Set-Cookie', serializeCookie(c.env, 'login', '', 0), { append: true })
@@ -173,6 +176,7 @@ app.get('/authorize', async (c) => {
                 scope: request.scope.length ? request.scope : SCOPES,
                 props: user,
             })
+            track(c.env, c.executionCtx, 'artifacts mcp client connected', user, { client_id: request.clientId, is_consent_remembered: true })
             return c.redirect(redirectTo)
         }
         const details = await oauth.describeConsent(request)
@@ -207,6 +211,7 @@ app.post('/authorize', async (c) => {
             scope: approved.request.scope,
             props: user,
         })
+        track(c.env, c.executionCtx, 'artifacts mcp client connected', user, { client_id: approved.request.clientId, is_consent_remembered: false })
         approved.headers.set('Location', redirectTo)
         return new Response(null, { status: 302, headers: approved.headers })
     } catch (error) {
@@ -302,6 +307,16 @@ app.get('/a/:id', async (c) => {
 
     c.header('Cache-Control', 'private, no-store')
     const access = owner ? 'owner' : artifact.visibility === 'team' ? 'team' : artifact.visibility === 'invited' ? 'invited' : 'public'
+    track(c.env, c.executionCtx, 'artifact viewed', user, {
+        artifact_id: artifact.id,
+        artifact_owner: artifact.owner_email,
+        version: version.version,
+        is_latest_version: version.version === artifact.latest_version,
+        format: version.format,
+        visibility: artifact.visibility,
+        access,
+    })
+
     return c.html(
         viewerPage({
             user,
@@ -361,6 +376,7 @@ app.post('/a/:id/visibility', async (c) => {
     }
     try {
         const artifact = await setVisibility(c.env, user, c.req.param('id'), visibility, body.invited as string[] | undefined)
+        track(c.env, c.executionCtx, 'artifact visibility changed', user, { artifact_id: artifact.id, visibility, source: 'web' })
         return c.json({ id: artifact.id, visibility: artifact.visibility, url: shareUrl(c.env, artifact.id), invited: await listInvites(c.env, artifact.id) })
     } catch (error) {
         if (error instanceof StoreError) return error.code === 'invalid' ? c.text(error.message, 400) : c.text('Not found', 404)

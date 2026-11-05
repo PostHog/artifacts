@@ -105,3 +105,20 @@ pnpm wrangler kv key put --binding OAUTH_KV --remote revoked:someone@posthog.com
 ```
 
 See [SECURITY.md](SECURITY.md) for the threat model and the controls behind it.
+
+## Usage analytics
+
+Server-side events go to [project 2](https://us.posthog.com/project/2) via `posthog-node` (`src/lib/analytics.ts`), set up per [PostHog's Cloudflare Workers docs](https://posthog.com/docs/libraries/cloudflare-workers). `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` are vars in `wrangler.jsonc`; an empty token turns analytics off. Local runs only send to a localhost `POSTHOG_HOST`.
+
+| Event | When | Key properties |
+|---|---|---|
+| `artifact published` | `publish_artifact` | `artifact_id`, `version`, `is_new_artifact`, `format`, `size_bytes`, `visibility` |
+| `artifact visibility changed` | `set_visibility` or the Share button | `artifact_id`, `visibility`, `source` |
+| `artifact details updated` | `update_artifact` | `artifact_id`, `is_title_changed`, `is_description_changed` |
+| `artifact deleted` | `delete_artifact` | `artifact_id` |
+| `artifact viewed` | viewer page loads | `artifact_id`, `artifact_owner`, `version`, `access` |
+| `artifacts mcp tool called` | every MCP tool call | `tool`, `is_successful`, `error_code` |
+| `artifacts mcp client connected` | MCP OAuth completes | `client_id`, `is_consent_remembered` |
+| `artifacts user signed in` | web sign-in | |
+
+Every event has `app = posthog-artifacts` and `is_signed_in`. Users are keyed by email with no person profiles (staff already have them in project 2). Content, titles, descriptions, notes and IPs are never sent. When querying, leave "Filter out internal and test users" off: it drops `@posthog.com` users.

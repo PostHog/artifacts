@@ -17,6 +17,9 @@ export interface AppEnv {
     POSTHOG_EU_OAUTH_HOST?: string
     /** Comma-separated https hosts MCP clients may redirect to, besides loopback. Default: claude.ai,claude.com */
     MCP_REDIRECT_HOSTS: string
+    /** Usage analytics (src/lib/analytics.ts). Empty token = off. */
+    POSTHOG_PROJECT_TOKEN?: string
+    POSTHOG_HOST?: string
     PUBLISH_LIMITER: RateLimit
     COMMENT_LIMITER: RateLimit
     REGISTER_LIMITER: RateLimit
