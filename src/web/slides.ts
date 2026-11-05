@@ -53,12 +53,15 @@ body.ph-presenting > section.ph-slide { box-shadow: none; }
   .ph-deck-rail { order: 1; width: auto; flex-direction: row; overflow: auto hidden; border-right: 0; border-top: 1px solid #d2d3cc; padding: 10px; }
 }
 @media (prefers-color-scheme: dark) {
-  body.ph-deck { background: #1d1f17; }
-  .ph-deck-rail { background: #23251d; border-color: #3b3d34; }
-  .ph-deck-thumb { color: #9ea096; } .ph-deck-thumb[aria-current="true"] { color: #eeefe9; }
-  .ph-deck-thumb .ph-frame { box-shadow: 0 0 0 1px #3b3d34; }
-  .ph-deck-bar { background: rgba(35,37,29,.92); box-shadow: 0 0 0 1px #3b3d34; color: #c8cac1; }
-  .ph-deck-bar button:hover { background: #2a2c24; color: #eeefe9; }
+  /* The PostHog app's dark tokens, as in public/styles.css. */
+  body.ph-deck { background: hsl(240deg 8% 8%); }
+  .ph-deck-rail { background: hsl(240deg 8% 10%); border-color: hsl(230deg 8% 20%); }
+  .ph-deck-thumb { color: hsl(0deg 0% 60%); } .ph-deck-thumb[aria-current="true"] { color: hsl(0deg 0% 90%); }
+  .ph-deck-thumb .ph-frame { box-shadow: 0 0 0 1px hsl(230deg 8% 20%); }
+  .ph-deck-thumb:hover .ph-frame { box-shadow: 0 0 0 1px hsl(230deg 8% 40%); }
+  .ph-deck-thumb[aria-current="true"] .ph-frame { box-shadow: 0 0 0 2px hsl(43deg 94% 57%); }
+  .ph-deck-bar { background: hsl(235deg 8% 15% / 92%); box-shadow: 0 0 0 1px hsl(230deg 8% 20%); color: hsl(0deg 0% 65%); }
+  .ph-deck-bar button:hover { background: hsl(230deg 8% 20%); color: hsl(0deg 0% 90%); }
 }
 `
 
