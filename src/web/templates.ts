@@ -2,7 +2,7 @@ import type { ConsentDescription } from '@cloudflare/workers-oauth-provider'
 import { html, raw } from 'hono/html'
 import type { HtmlEscapedString } from 'hono/utils/html'
 import type { User } from '../env'
-import type { Artifact, Version } from '../store'
+import type { Artifact, Comment, Commenter, Version } from '../store'
 import { SANDBOX } from './content'
 
 type Html = HtmlEscapedString | Promise<HtmlEscapedString>
@@ -110,7 +110,58 @@ export function visibilityPill(visibility: Artifact['visibility']) {
     return html`<span class="pill" data-visibility-pill>${lockIcon} Private</span>`
 }
 
+export interface CommentsView {
+    enabled: boolean
+    items: Comment[]
+    /** Who the viewer would comment as, or null if they can only read. */
+    me: Commenter | null
+    owner: boolean
+    open: boolean
+    error?: string
+}
+
+function commentsPanel(artifact: Artifact, { enabled, items, me, owner, open, error }: CommentsView) {
+    const canDelete = (c: Comment) => owner || (!!me && c.author_kind === me.kind && c.author_email === me.email)
+    return html`<details class="pop" data-close-outside ${open ? 'open' : ''}>
+    <summary class="btn secondary"><span>Comments${enabled ? ` (${items.length})` : ''}</span></summary>
+    <div class="panel right comments" id="comments">
+      <h3>Comments</h3>
+      ${owner
+          ? html`<form method="post" action="/a/${artifact.id}/comments/settings" class="comment-settings">
+        <input type="hidden" name="enabled" value="${enabled ? '0' : '1'}">
+        <p class="hint">${enabled ? 'On. ' : 'Off. '}Comments are visible to everyone who can open this artifact and is signed in (PostHog staff, and invited people), never to anonymous link viewers.</p>
+        <button class="btn secondary" type="submit"><span>${enabled ? 'Turn comments off' : 'Turn comments on'}</span></button>
+      </form>`
+          : ''}
+      ${enabled
+          ? html`${error ? html`<p class="error small">${error}</p>` : ''}
+      <ul class="comment-list">
+        ${items.length
+            ? items.map(
+                  (c) => html`<li class="comment">
+          <div class="row"><strong title="${owner ? c.author_email : ''}">${c.author_name}</strong>
+            <span class="muted small">${relativeTime(c.created_at)}${c.version !== artifact.latest_version ? ` · on v${c.version}` : ''}</span></div>
+          <div class="body">${c.body}</div>
+          ${canDelete(c)
+              ? html`<form method="post" action="/a/${artifact.id}/comments/${c.id}/delete"><button class="ghost small" type="submit">Delete</button></form>`
+              : ''}
+        </li>`
+              )
+            : html`<li class="hint">No comments yet.</li>`}
+      </ul>
+      ${me
+          ? html`<form method="post" action="/a/${artifact.id}/comments" class="stack">
+        <textarea class="text" name="body" rows="3" maxlength="2000" placeholder="Add a comment" aria-label="Comment" required></textarea>
+        <button class="btn" type="submit"><span>Post comment</span></button>
+      </form>`
+          : html`<p class="hint">Sign in to comment.</p>`}`
+          : ''}
+    </div>
+  </details>`
+}
+
 interface ViewerOptions {
+    comments: CommentsView | null
     user: User | null
     /** Email of an invited viewer (not a PostHog user), when that's how this page is being viewed. */
     guest: string | null
@@ -124,7 +175,7 @@ interface ViewerOptions {
     shareUrl: string
 }
 
-export function viewerPage({ user, guest, invites, artifact, versions, version, owner, frameSrc, shareUrl }: ViewerOptions) {
+export function viewerPage({ comments, user, guest, invites, artifact, versions, version, owner, frameSrc, shareUrl }: ViewerOptions) {
     const isLatest = version.version === artifact.latest_version
     const author = artifact.owner_name ?? artifact.owner_email
 
@@ -186,6 +237,7 @@ export function viewerPage({ user, guest, invites, artifact, versions, version, 
   <span class="meta">${owner ? 'Updated' : 'By ' + author + ' ·'} ${relativeTime(isLatest ? artifact.updated_at : version.created_at)}</span>`
 
     const actions = html`<button class="ghost hide-sm" type="button" data-fullscreen title="Full screen">${expandIcon}</button>
+  ${comments ? commentsPanel(artifact, comments) : ''}
   ${share}`
 
     return layout({

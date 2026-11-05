@@ -27,6 +27,16 @@ Browser ─────────────▶ │ /a/:id          viewer: P
 - **Versioning:** each publish with an `artifact_id` adds an immutable version. Every version is stored under its own R2 key, so concurrent publishes can't clobber each other. The owner sees a version picker and a banner when viewing an old version.
 - **Untrusted content:** artifacts run in an iframe with `sandbox` (no `allow-same-origin`). The content response also carries a `Content-Security-Policy: sandbox` header, so it keeps an opaque origin even when opened top-level, and can't read cookies or call the app as the viewer. To isolate it further, set `CONTENT_URL` to a separate hostname. That host only serves `/c/*`.
 
+### Comments
+
+The owner can turn comments on for an artifact (off by default, so nothing already shared starts showing a discussion). A **Comments** button in the viewer bar then opens a panel with the thread and a box to add to it.
+
+- **Who sees and writes them:** the owner, signed-in PostHog staff on team and public artifacts, and invited guests on invited ones. Anonymous link viewers see no comments and can't write any, because a public link carries no identity. Private artifacts take comments only from the owner. Everyone who can see comments sees all of them, so say so before using it on an artifact shared with both staff and customers.
+- **Names:** staff show by name. Guests show as `ana (guest)` to other viewers, never their email; the owner sees the full address on hover.
+- **Deleting:** authors delete their own comments and the owner deletes any. Turning comments off hides them without deleting them.
+- **Limits:** plain text only, 2000 characters, 500 comments per artifact, 10 posts a minute per person. Each comment records which version was latest when it was written.
+- **Not included:** replies, edits, notifications and anchoring a comment to part of the artifact (the content runs in a sandboxed iframe the viewer can't see into). Claude can read them with `list_comments`.
+
 ### MCP tools
 
 | Tool | Purpose |
@@ -35,7 +45,8 @@ Browser ─────────────▶ │ /a/:id          viewer: P
 | `list_artifacts` | Your artifacts, newest first. |
 | `get_artifact` | Metadata, version history, and optionally a version's content. |
 | `set_visibility` | `private`, `team`, `invited` (with `invited_emails`, which replaces the list) or `public`. |
-| `update_artifact` | Rename or change the description. |
+| `update_artifact` | Rename, change the description, or turn comments on or off (`comments_enabled`). |
+| `list_comments` | Comments on an artifact you own: author, email, staff or guest, version, text. |
 | `delete_artifact` | Permanent delete. |
 
 ### Claude Code plugin
