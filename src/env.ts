@@ -20,6 +20,8 @@ export interface AppEnv {
     /** Usage analytics (src/lib/analytics.ts). Empty token = off. */
     POSTHOG_PROJECT_TOKEN?: string
     POSTHOG_HOST?: string
+    /** Session replay (src/lib/replay.ts). "false" = off; needs POSTHOG_PROJECT_TOKEN. */
+    SESSION_REPLAY?: string
     PUBLISH_LIMITER: RateLimit
     COMMENT_LIMITER: RateLimit
     REGISTER_LIMITER: RateLimit

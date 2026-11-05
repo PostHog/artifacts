@@ -108,6 +108,16 @@ pnpm wrangler kv key put --binding OAUTH_KV --remote revoked:someone@posthog.com
 
 See [SECURITY.md](SECURITY.md) for the threat model and the controls behind it.
 
+## Session replay
+
+Every page is recorded with PostHog session replay into the same project as the usage events below, including the artifact inside the viewer's iframe (`src/lib/replay.ts`).
+
+- **The page:** `public/replay.js` asks `/replay/config` whether replay is on, then loads posthog-js. Recording starts with `startSessionRecording(true)`, so the project's sampling and triggers don't apply. Autocapture and surveys are off, but `$pageview` and `$pageleave` are captured.
+- **The artifact:** content runs in a sandboxed iframe with an opaque origin, which the page's recorder can't see into. `serveContent` adds `src/web/replay-frame.ts` to the content, which runs PostHog's rrweb recorder in the frame with `recordCrossOriginIframes`. It posts its events to the page, which uploads them as part of the same replay.
+- **Who:** everyone. Staff are recorded under their lowercased email, the same distinct ID as the server-side events, with no person profiles created. Invited guests and anonymous viewers are anonymous, and a guest's email is never sent. Each recording has a `viewer` property (`staff`, `guest` or `anonymous`) and, on artifact pages, `artifact_id`.
+- **Masking:** form inputs are masked; artifact text is not. Authors can add `ph-no-capture` (blocked) or `ph-mask` (masked) to parts of an artifact.
+- **Off switch:** `SESSION_REPLAY` in `wrangler.jsonc`. Set it to `"false"` to turn replay off, which also removes the frame script and the CSP allowances. Like analytics, local runs only record to a localhost `POSTHOG_HOST`.
+
 ## Usage analytics
 
 Server-side events go to [project 2](https://us.posthog.com/project/2) via `posthog-node` (`src/lib/analytics.ts`), set up per [PostHog's Cloudflare Workers docs](https://posthog.com/docs/libraries/cloudflare-workers). `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` are vars in `wrangler.jsonc`; an empty token turns analytics off. Local runs only send to a localhost `POSTHOG_HOST`.
