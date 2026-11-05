@@ -36,4 +36,5 @@ export interface User {
  * allowlist who sign in with their own PostHog account. public: anyone with the link.
  */
 export type Visibility = 'private' | 'team' | 'invited' | 'public'
-export type Format = 'html' | 'markdown'
+/** html: a page. slides: HTML where each <section> in <body> is a 1280×720 slide. markdown: prose. */
+export type Format = 'html' | 'slides' | 'markdown'

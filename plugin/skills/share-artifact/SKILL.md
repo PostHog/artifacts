@@ -24,9 +24,32 @@ then `/mcp` to sign in with their PostHog account, and stop.
 ## 2. Pick a format
 
 - **markdown** is for prose: write-ups, notes, plans, summaries. The site renders it with PostHog typography.
+- **slides** is for decks: a presentation, a readout, a pitch, anything the user calls slides. See "Writing slides" below.
 - **html** is for anything visual or interactive: charts, dashboards, tables you can sort, designed pages. Send one complete, self-contained document. Inline the CSS and JS. External scripts may only come from public CDNs, with pinned versions.
 - HTML runs in a sandboxed iframe with an opaque origin, so `localStorage`, cookies and same-origin requests are unavailable. Wrap storage access in `try/catch`, or skip it.
 - The limit is 5 MB. Don't embed large images as base64. Link to them instead.
+
+### Writing slides
+
+Send one complete HTML document, like `html`, but put each slide in its own `<section>` **directly inside `<body>`**. The viewer adds a thumbnail rail on the left, the current slide scaled to fit, arrow-key navigation and a Present button. Don't build your own navigation.
+
+- Design every slide for a fixed **1280×720** canvas. Each `<section>` gets that exact size and `overflow: hidden`, so content that doesn't fit is cut off. Keep it to one idea per slide, with big type (titles around 56px, body text at least 24px).
+- Slides get `padding: 64px 80px` and a white background by default. Override them with your own CSS, per slide (`<section class="title">`) or for all (`body > section { … }`).
+- Put shared CSS in `<head>` and shared scripts at the end of `<body>`. Anything in `<body>` that isn't a `<section>` isn't shown.
+- Charts work. Every slide is laid out at full size even when it isn't on screen, so libraries that measure their container draw correctly. The thumbnails copy chart pixels after the page loads.
+
+```html
+<!doctype html>
+<html><head><style>
+  body > section { display: flex; flex-direction: column; justify-content: center; }
+  h1 { font-size: 56px; margin: 0 0 24px; }
+  p, li { font-size: 26px; }
+</style></head>
+<body>
+  <section><h1>Q3 churn: EU self-serve</h1><p>What changed and what we'll do</p></section>
+  <section><h1>Churn rose 2.1 points</h1><ul><li>…</li></ul></section>
+</body></html>
+```
 
 ## 3. Scrub before you publish
 

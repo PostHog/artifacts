@@ -26,6 +26,7 @@ Browser ─────────────▶ │ /a/:id          viewer: P
   - Unsharing, removing someone from the list, or publishing a new version revokes iframe grants that are already open.
 - **Versioning:** each publish with an `artifact_id` adds an immutable version. Every version is stored under its own R2 key, so concurrent publishes can't clobber each other. The owner sees a version picker and a banner when viewing an old version.
 - **Untrusted content:** artifacts run in an iframe with `sandbox` (no `allow-same-origin`). The content response also carries a `Content-Security-Policy: sandbox` header, so it keeps an opaque origin even when opened top-level, and can't read cookies or call the app as the viewer. To isolate it further, set `CONTENT_URL` to a separate hostname. That host only serves `/c/*`.
+- **Formats:** `html` (a page), `slides` and `markdown` (rendered with PostHog typography). A `slides` artifact is an HTML document in which each `<section>` directly inside `<body>` is a 1280×720 slide. At serve time it's wrapped in a deck viewer (`src/web/slides.ts`) with a thumbnail rail, scale-to-fit, arrow-key navigation and a Present mode, all inside the same sandboxed iframe as any other content.
 
 ### Comments
 
