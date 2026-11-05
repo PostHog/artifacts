@@ -36,7 +36,8 @@ The owner can turn comments on for an artifact (off by default, so nothing alrea
 - **Names:** staff show by name. Guests show as `ana (guest)` to other viewers, never their email; the owner sees the full address on hover.
 - **Deleting:** authors delete their own comments and the owner deletes any. Turning comments off hides them without deleting them.
 - **Limits:** plain text only, 2000 characters, 500 comments per artifact, 10 posts a minute per person. Each comment records which version was latest when it was written.
-- **Not included:** replies, edits, notifications and anchoring a comment to part of the artifact (the content runs in a sandboxed iframe the viewer can't see into). Claude can read them with `list_comments`.
+- **On a passage:** select text in the artifact and a **Comment** button appears next to the selection. Pressing it opens the panel with the passage quoted above the box. Commented passages are highlighted in the artifact; clicking one jumps to its comment, and clicking a comment's quote scrolls the passage into view (and switches slide, in a deck). Works for HTML, Markdown and slides, on the latest version while comments are on. Passages are stored as the quoted text plus up to 64 characters either side, not a DOM position, so when the author publishes a new version a comment whose text has gone shows "Can't find this text in this version" instead of pointing at the wrong place. Highlighting uses the CSS Custom Highlight API, so a browser without it still gets the button, quotes and comments but no highlight.
+- **Not included:** replies, edits and notifications. Claude can read comments, with the quoted text as `on_text`, using `list_comments`.
 
 ### MCP tools
 

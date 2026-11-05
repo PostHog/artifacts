@@ -26,6 +26,10 @@ export interface Comment {
     author_name: string
     author_kind: 'staff' | 'guest'
     body: string
+    /** The passage this comment is about, as a text quote with a little context. All null for a whole-artifact comment. */
+    anchor_exact: string | null
+    anchor_prefix: string | null
+    anchor_suffix: string | null
     created_at: number
 }
 
@@ -291,6 +295,24 @@ export interface Commenter {
     kind: 'staff' | 'guest'
 }
 
+export const MAX_ANCHOR_LENGTH = 500
+export const MAX_ANCHOR_CONTEXT = 64
+
+export interface Anchor {
+    exact: string
+    prefix: string
+    suffix: string
+}
+
+/** Plain text, no control characters beyond newline and tab. Returns null when there is no usable selection. */
+export function cleanAnchor(input?: { exact?: string; prefix?: string; suffix?: string }): Anchor | null {
+    const strip = (value: string | undefined) => (value ?? '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+    const exact = strip(input?.exact).trim()
+    if (!exact) return null
+    if (exact.length > MAX_ANCHOR_LENGTH) throw new StoreError('invalid', 'anchor')
+    return { exact, prefix: strip(input?.prefix).slice(-MAX_ANCHOR_CONTEXT), suffix: strip(input?.suffix).slice(0, MAX_ANCHOR_CONTEXT) }
+}
+
 export async function listComments(env: AppEnv, id: string): Promise<Comment[]> {
     const { results } = await env.DB.prepare('SELECT * FROM comments WHERE artifact_id = ? ORDER BY created_at ASC LIMIT ?')
         .bind(id, MAX_COMMENTS_PER_ARTIFACT)
@@ -303,7 +325,7 @@ export async function countComments(env: AppEnv, id: string): Promise<number> {
 }
 
 /** Stored as plain text and only ever rendered escaped. The caller has already decided this person may comment. */
-export async function addComment(env: AppEnv, artifact: Artifact, author: Commenter, body: string): Promise<Comment> {
+export async function addComment(env: AppEnv, artifact: Artifact, author: Commenter, body: string, anchor: Anchor | null = null): Promise<Comment> {
     const text = body.replace(/\r\n/g, '\n').trim()
     if (!text) throw new StoreError('invalid', 'Write something first')
     if (text.length > MAX_COMMENT_LENGTH) throw new StoreError('too_large', `Comments are limited to ${MAX_COMMENT_LENGTH} characters`)
@@ -316,12 +338,15 @@ export async function addComment(env: AppEnv, artifact: Artifact, author: Commen
         author_name: author.name.slice(0, 100),
         author_kind: author.kind,
         body: text,
+        anchor_exact: anchor?.exact ?? null,
+        anchor_prefix: anchor?.prefix ?? null,
+        anchor_suffix: anchor?.suffix ?? null,
         created_at: Date.now(),
     }
     await env.DB.prepare(
-        'INSERT INTO comments (id, artifact_id, version, author_email, author_name, author_kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO comments (id, artifact_id, version, author_email, author_name, author_kind, body, anchor_exact, anchor_prefix, anchor_suffix, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     )
-        .bind(comment.id, comment.artifact_id, comment.version, comment.author_email, comment.author_name, comment.author_kind, comment.body, comment.created_at)
+        .bind(comment.id, comment.artifact_id, comment.version, comment.author_email, comment.author_name, comment.author_kind, comment.body, comment.anchor_exact, comment.anchor_prefix, comment.anchor_suffix, comment.created_at)
         .run()
     return comment
 }

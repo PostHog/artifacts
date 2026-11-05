@@ -2,6 +2,7 @@ import { Marked } from 'marked'
 import type { AppEnv } from '../env'
 import { openToken, sealToken } from '../lib/crypto'
 import { isRevoked } from '../lib/session'
+import { injectAnnotator } from './annotate'
 import { renderSlides } from './slides'
 import { getArtifact, getContent, getVersion, isInvited } from '../store'
 
@@ -25,6 +26,8 @@ interface FrameGrant {
     team?: boolean
     /** Issued to an invited viewer (their email): re-checked against the allowlist on every load. */
     guest?: string
+    /** The viewer can see comments on this (latest) version: add the annotator script to the content. */
+    ann?: boolean
 }
 
 /** How the viewer got access: as the owner, or as someone the artifact is shared with. */
@@ -37,13 +40,14 @@ export const contentOrigin = (env: AppEnv) => new URL(env.CONTENT_URL || env.PUB
  * a short-lived signed URL. The content route then needs no session, which keeps it working on
  * a separate content origin where the session cookie is never sent.
  */
-export async function frameUrl(env: AppEnv, id: string, version: number, access: FrameAccess, guestEmail?: string): Promise<string> {
+export async function frameUrl(env: AppEnv, id: string, version: number, access: FrameAccess, guestEmail?: string, annotate = false): Promise<string> {
     const grant: FrameGrant = {
         id,
         v: version,
         ...(access === 'public' && { pub: true }),
         ...(access === 'team' && { team: true }),
         ...(access === 'invited' && guestEmail && { guest: guestEmail }),
+        ...(annotate && { ann: true }),
     }
     const token = await sealToken(env.SESSION_SECRET, 'frame', grant, FRAME_TOKEN_TTL)
     return `${contentOrigin(env)}/c/${id}/${version}?t=${encodeURIComponent(token)}`
@@ -94,8 +98,14 @@ export async function serveContent(env: AppEnv, request: Request, id: string, ve
     const meta = await getVersion(env, id, version)
     const content = meta && (await getContent(env, meta))
     if (!meta || content == null) return refuse(404, 'Not found')
-    const body = meta.format === 'markdown' ? renderMarkdown(content) : meta.format === 'slides' ? renderSlides(content) : content
-    return new Response(body, { headers: contentHeaders(env) })
+    const rendered = meta.format === 'markdown' ? renderMarkdown(content) : meta.format === 'slides' ? renderSlides(content) : content
+    // Re-checked here, so turning comments off, or publishing a newer version, takes the script out on the next load.
+    let annotate = false
+    if (grant.ann) {
+        const artifact = await getArtifact(env, id)
+        annotate = !!artifact?.comments_enabled && artifact.latest_version === version
+    }
+    return new Response(annotate ? injectAnnotator(rendered, new URL(env.PUBLIC_URL).origin) : rendered, { headers: contentHeaders(env) })
 }
 
 const marked = new Marked({ gfm: true })

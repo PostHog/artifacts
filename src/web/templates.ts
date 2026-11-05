@@ -122,7 +122,7 @@ export interface CommentsView {
 
 function commentsPanel(artifact: Artifact, { enabled, items, me, owner, open, error }: CommentsView) {
     const canDelete = (c: Comment) => owner || (!!me && c.author_kind === me.kind && c.author_email === me.email)
-    return html`<details class="pop" data-close-outside ${open ? 'open' : ''}>
+    return html`<details class="pop" data-close-outside data-comments data-can-comment="${me ? '1' : '0'}" ${open ? 'open' : ''}>
     <summary class="btn secondary"><span>Comments${enabled ? ` (${items.length})` : ''}</span></summary>
     <div class="panel right comments" id="comments">
       <h3>Comments</h3>
@@ -138,9 +138,12 @@ function commentsPanel(artifact: Artifact, { enabled, items, me, owner, open, er
       <ul class="comment-list">
         ${items.length
             ? items.map(
-                  (c) => html`<li class="comment">
+                  (c) => html`<li class="comment" data-comment-id="${c.id}" ${c.anchor_exact ? html`data-exact="${c.anchor_exact}" data-prefix="${c.anchor_prefix ?? ''}" data-suffix="${c.anchor_suffix ?? ''}"` : ''}>
           <div class="row"><strong title="${owner ? c.author_email : ''}">${c.author_name}</strong>
             <span class="muted small">${relativeTime(c.created_at)}${c.version !== artifact.latest_version ? ` · on v${c.version}` : ''}</span></div>
+          ${c.anchor_exact
+              ? html`<button type="button" class="quote" data-quote="${c.id}" title="Show in the document">“${c.anchor_exact.length > 140 ? c.anchor_exact.slice(0, 140) + '…' : c.anchor_exact}”</button><span class="lost-note small muted">Can't find this text in this version</span>`
+              : ''}
           <div class="body">${c.body}</div>
           ${canDelete(c)
               ? html`<form method="post" action="/a/${artifact.id}/comments/${c.id}/delete"><button class="ghost small" type="submit">Delete</button></form>`
@@ -150,7 +153,10 @@ function commentsPanel(artifact: Artifact, { enabled, items, me, owner, open, er
             : html`<li class="hint">No comments yet.</li>`}
       </ul>
       ${me
-          ? html`<form method="post" action="/a/${artifact.id}/comments" class="stack">
+          ? html`<form method="post" action="/a/${artifact.id}/comments" class="stack" data-comment-form>
+        <p class="hint">Select text in the document and press Comment to attach a comment to it.</p>
+        <div class="composing" data-composing hidden><span class="muted small">Commenting on</span> <q data-composing-text></q> <button type="button" class="ghost small" data-composing-clear>Clear</button></div>
+        <input type="hidden" name="anchor_exact"><input type="hidden" name="anchor_prefix"><input type="hidden" name="anchor_suffix">
         <textarea class="text" name="body" rows="3" maxlength="2000" placeholder="Add a comment" aria-label="Comment" required></textarea>
         <button class="btn" type="submit"><span>Post comment</span></button>
       </form>`

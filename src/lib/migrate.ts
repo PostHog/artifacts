@@ -3,6 +3,7 @@ import teamVisibility from '../../migrations/0002_team_visibility.sql'
 import invitedVisibility from '../../migrations/0003_invited_visibility.sql'
 import comments from '../../migrations/0004_comments.sql'
 import slidesFormat from '../../migrations/0005_slides_format.sql'
+import commentAnchors from '../../migrations/0006_comment_anchors.sql'
 
 /**
  * Schema migrations, applied by the Worker on first use in each isolate. Deploys are a plain
@@ -16,6 +17,7 @@ const MIGRATIONS: [name: string, sql: string][] = [
     ['0003_invited_visibility', invitedVisibility],
     ['0004_comments', comments],
     ['0005_slides_format', slidesFormat],
+    ['0006_comment_anchors', commentAnchors],
 ]
 
 function statements(sql: string): string[] {

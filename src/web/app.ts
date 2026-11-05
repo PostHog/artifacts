@@ -8,7 +8,7 @@ import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/poli
 import { clearGuestCookie, getGuest, guestCookie, normalizeEmail } from '../lib/guest'
 import { LoginError, beginPostHogLogin, clientMetadata, finishPostHogLogin, loginErrorMessage } from '../lib/posthog-oauth'
 import { clearSessionCookie, getUser, isAllowedEmail, isLocal, isRevoked, safeNext, serializeCookie, sessionCookie } from '../lib/session'
-import { type Commenter, StoreError, addComment, deleteComment, getArtifact, getVersion, isInvited, isOwner, listArtifacts, listComments, listInvites, listVersions, setCommentsEnabled, setVisibility, shareUrl } from '../store'
+import { type Commenter, StoreError, addComment, cleanAnchor, deleteComment, getArtifact, getVersion, isInvited, isOwner, listArtifacts, listComments, listInvites, listVersions, setCommentsEnabled, setVisibility, shareUrl } from '../store'
 import { contentOrigin, frameUrl, serveContent } from './content'
 import type { CommentsView } from './templates'
 import { consentPage, guestGatePage, homePage, loginPage, messagePage, viewerPage } from './templates'
@@ -253,6 +253,7 @@ const COMMENT_ERRORS: Record<string, string> = {
     long: 'That comment is too long.',
     full: 'This artifact has reached its comment limit.',
     slow: 'Too many comments. Wait a minute and try again.',
+    anchor: "Couldn't attach that selection. Clear it and try again.",
 }
 
 /** What a visitor sees at an invited artifact until they've signed in as someone on the list. Shows nothing about the artifact. */
@@ -327,7 +328,7 @@ app.get('/a/:id', async (c) => {
             comments: commentsView,
             version,
             owner,
-            frameSrc: await frameUrl(c.env, artifact.id, version.version, access, guest ?? undefined),
+            frameSrc: await frameUrl(c.env, artifact.id, version.version, access, guest ?? undefined, !!commentsView?.enabled && version.version === artifact.latest_version),
             shareUrl: shareUrl(c.env, artifact.id),
         })
     )
@@ -393,11 +394,16 @@ app.post('/a/:id/comments', async (c) => {
     const back = (error?: string) => c.redirect(`/a/${artifact.id}?c=1${error ? `&cerr=${error}` : ''}`)
     const { success } = await c.env.COMMENT_LIMITER.limit({ key: `${who.me.kind}:${who.me.email}` })
     if (!success) return back('slow')
+    const data = await c.req.formData()
+    const field = (name: string) => String(data.get(name) ?? '')
     try {
-        await addComment(c.env, artifact, who.me, String((await c.req.formData()).get('body') ?? ''))
+        // The selection comes from the viewer page's own form, filled in from a message the artifact's script sent,
+        // so it is untrusted text: cleaned and length-capped here, and only ever rendered escaped.
+        const anchor = cleanAnchor({ exact: field('anchor_exact'), prefix: field('anchor_prefix'), suffix: field('anchor_suffix') })
+        await addComment(c.env, artifact, who.me, field('body'), anchor)
     } catch (error) {
         if (!(error instanceof StoreError)) throw error
-        return back(error.code === 'invalid' ? 'empty' : error.message.includes('limit') && !error.message.includes('characters') ? 'full' : 'long')
+        return back(error.message === 'anchor' ? 'anchor' : error.code === 'invalid' ? 'empty' : error.message.includes('limit') && !error.message.includes('characters') ? 'full' : 'long')
     }
     return back()
 })

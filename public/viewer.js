@@ -98,6 +98,72 @@
     const deck = document.querySelector('iframe[data-autofocus]')
     deck?.addEventListener('load', () => deck.focus())
 
+    // --- Comments on a passage -------------------------------------------------------------------
+    // The artifact runs in a sandboxed iframe we can't read, so a small script served with it (src/web/annotate.ts)
+    // reports selections and highlights comments, over postMessage. Everything it sends is untrusted text: it only
+    // ever fills a form the person still has to submit, or toggles a class.
+    const frame = document.querySelector('.viewer iframe')
+    const panel = document.querySelector('[data-comments]')
+    if (frame && panel) {
+        const canComment = panel.dataset.canComment === '1'
+        const commentForm = panel.querySelector('[data-comment-form]')
+        const send = (message) => frame.contentWindow?.postMessage({ pa: 1, ...message }, '*')
+        const items = () =>
+            [...panel.querySelectorAll('[data-comment-id][data-exact]')].map((li) => ({
+                id: li.dataset.commentId,
+                exact: li.dataset.exact,
+                prefix: li.dataset.prefix || '',
+                suffix: li.dataset.suffix || '',
+            }))
+        const sync = () => {
+            send({ type: 'config', canComment })
+            send({ type: 'highlights', items: items() })
+        }
+        frame.addEventListener('load', sync)
+        sync()
+
+        const text = (value, max) => (typeof value === 'string' ? value.slice(0, max) : '')
+        const composing = commentForm?.querySelector('[data-composing]')
+        const setAnchor = (anchor) => {
+            for (const [name, max] of [['anchor_exact', 500], ['anchor_prefix', 64], ['anchor_suffix', 64]]) {
+                commentForm.elements[name].value = anchor ? text(anchor[name.slice(7)], max) : ''
+            }
+            const exact = commentForm.elements.anchor_exact.value
+            composing.hidden = !exact
+            composing.querySelector('[data-composing-text]').textContent = exact.length > 80 ? exact.slice(0, 80) + '…' : exact
+        }
+        commentForm?.querySelector('[data-composing-clear]')?.addEventListener('click', () => setAnchor(null))
+
+        const flash = (id) => {
+            const li = panel.querySelector(`[data-comment-id="${CSS.escape(id)}"]`)
+            if (!li) return
+            panel.open = true
+            li.scrollIntoView({ block: 'nearest' })
+            li.classList.add('flash')
+            setTimeout(() => li.classList.remove('flash'), 1600)
+        }
+
+        window.addEventListener('message', (event) => {
+            if (event.source !== frame.contentWindow) return
+            const message = event.data
+            if (!message || message.pa !== 1) return
+            if (message.type === 'ready') sync()
+            else if (message.type === 'resolved' && Array.isArray(message.ids)) {
+                const found = new Set(message.ids.map(String))
+                for (const li of panel.querySelectorAll('[data-exact]')) li.classList.toggle('lost', !found.has(li.dataset.commentId))
+            } else if (message.type === 'compose' && canComment && commentForm && message.anchor && typeof message.anchor.exact === 'string') {
+                setAnchor(message.anchor)
+                panel.open = true
+                commentForm.elements.body.focus()
+            } else if (message.type === 'focus' && typeof message.id === 'string') flash(message.id)
+        })
+
+        panel.addEventListener('click', (event) => {
+            const quote = event.target.closest?.('[data-quote]')
+            if (quote) send({ type: 'scroll', id: quote.dataset.quote })
+        })
+    }
+
     document.querySelector('[data-fullscreen]')?.addEventListener('click', () => {
         document.querySelector('.viewer iframe')?.requestFullscreen?.().catch(() => {})
     })
