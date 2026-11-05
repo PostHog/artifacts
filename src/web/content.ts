@@ -3,6 +3,8 @@ import type { AppEnv } from '../env'
 import { openToken, sealToken } from '../lib/crypto'
 import { isRevoked } from '../lib/session'
 import { injectAnnotator } from './annotate'
+import { injectReplayRecorder } from './replay-frame'
+import { replaySettings } from '../lib/replay'
 import { renderSlides } from './slides'
 import { getArtifact, getContent, getVersion, isInvited } from '../store'
 
@@ -105,7 +107,11 @@ export async function serveContent(env: AppEnv, request: Request, id: string, ve
         const artifact = await getArtifact(env, id)
         annotate = !!artifact?.comments_enabled && artifact.latest_version === version
     }
-    return new Response(annotate ? injectAnnotator(rendered, new URL(env.PUBLIC_URL).origin) : rendered, { headers: contentHeaders(env) })
+    const parentOrigin = new URL(env.PUBLIC_URL).origin
+    let body = annotate ? injectAnnotator(rendered, parentOrigin) : rendered
+    const replay = replaySettings(env)
+    if (replay) body = injectReplayRecorder(body, replay.assetsHost, parentOrigin)
+    return new Response(body, { headers: contentHeaders(env) })
 }
 
 const marked = new Marked({ gfm: true })

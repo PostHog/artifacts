@@ -35,6 +35,7 @@ ${og.description ? html`<meta property="og:description" content="${og.descriptio
     : ''}
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
+<script src="/replay.js" defer></script>
 </head>
 <body class="${bodyClass ?? ''}">
 ${body}

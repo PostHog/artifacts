@@ -1,4 +1,5 @@
 import type { AppEnv } from '../env'
+import { replaySettings } from './replay'
 
 /**
  * Where MCP OAuth clients may receive tokens. Loopback covers local clients (Claude Code, Cursor,
@@ -46,12 +47,15 @@ export function pageCsp(env: AppEnv, contentOrigin: string): string {
     // form-action also governs the redirect after the consent form posts, so it must include where
     // MCP clients receive their authorization code.
     const formTargets = ["'self'", 'http://localhost:*', 'http://127.0.0.1:*', 'http://[::1]:*', ...allowedRedirectHosts(env).map((h) => `https://${h}`)]
+    // Session replay loads posthog-js and its recorder from the assets host and uploads to the API host.
+    const replay = replaySettings(env)
+    const replayHosts = replay ? [...new Set([replay.assetsHost, replay.apiHost])].join(' ') : ''
     return [
         "default-src 'none'",
-        "script-src 'self'",
+        `script-src 'self' ${replay ? replay.assetsHost : ''}`.trim(),
         "style-src 'self'",
         "img-src 'self' data:",
-        "connect-src 'self'",
+        `connect-src 'self' ${replayHosts}`.trim(),
         `frame-src ${contentOrigin}`,
         `form-action ${formTargets.join(' ')}`,
         "base-uri 'none'",

@@ -2,6 +2,7 @@ import { AuthorizationError, CimdFetchError } from '@cloudflare/workers-oauth-pr
 import { Hono, type Context } from 'hono'
 import type { AppEnv, User } from '../env'
 import { track } from '../lib/analytics'
+import { replaySettings, replayViewer } from '../lib/replay'
 import type { Artifact } from '../store'
 import { deriveSecret } from '../lib/crypto'
 import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/policy'
@@ -58,6 +59,24 @@ const sameOrigin = (c: Context<Env>) => {
     const origin = c.req.header('Origin')
     return !origin || origin === new URL(c.env.PUBLIC_URL).origin
 }
+
+// Session replay settings for public/replay.js. Per viewer, so never cached.
+app.get('/replay/config', async (c) => {
+    c.header('Cache-Control', 'private, no-store')
+    const replay = replaySettings(c.env)
+    if (!replay) return c.json({ enabled: false })
+    const user = c.get('user')
+    const guest = user ? null : await getGuest(c.env, c.req.raw)
+    return c.json({
+        enabled: true,
+        token: replay.token,
+        api_host: replay.apiHost,
+        assets_host: replay.assetsHost,
+        // What artifact frames report as their origin; public/replay.js only relays recorder messages from it.
+        content_origin: contentOrigin(c.env),
+        ...(await replayViewer(user, guest)),
+    })
+})
 
 app.get('/', async (c) => {
     const user = c.get('user')
