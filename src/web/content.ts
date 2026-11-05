@@ -2,6 +2,7 @@ import { Marked } from 'marked'
 import type { AppEnv } from '../env'
 import { openToken, sealToken } from '../lib/crypto'
 import { isRevoked } from '../lib/session'
+import { renderSlides } from './slides'
 import { getArtifact, getContent, getVersion, isInvited } from '../store'
 
 // The iframe loads once per page view, so a grant only needs to outlive that load. Short-lived
@@ -93,7 +94,7 @@ export async function serveContent(env: AppEnv, request: Request, id: string, ve
     const meta = await getVersion(env, id, version)
     const content = meta && (await getContent(env, meta))
     if (!meta || content == null) return refuse(404, 'Not found')
-    const body = meta.format === 'markdown' ? renderMarkdown(content) : content
+    const body = meta.format === 'markdown' ? renderMarkdown(content) : meta.format === 'slides' ? renderSlides(content) : content
     return new Response(body, { headers: contentHeaders(env) })
 }
 

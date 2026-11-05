@@ -98,7 +98,11 @@ export function buildServer(env: AppEnv, user: User): McpServer {
             description: `Publish HTML or Markdown content as a hosted artifact and get its link. Omit artifact_id to create a new artifact (private by default); pass artifact_id to publish a new version of one you own. Content must be self-contained (inline CSS/JS, or assets from public CDNs) and at most ${MAX_CONTENT_BYTES / 1024 / 1024} MB.`,
             inputSchema: z.object({
                 content: z.string().min(1).describe('The full HTML document or Markdown text'),
-                format: z.enum(['html', 'markdown']).describe('How to render the content'),
+                format: z
+                    .enum(['html', 'slides', 'markdown'])
+                    .describe(
+                        'How to render the content. "html": a page. "slides": a deck; send one HTML document whose <body> contains one <section> per slide, each designed for a fixed 1280×720 canvas (the viewer scales it, and adds a thumbnail rail, arrow-key navigation and a Present button). "markdown": prose.'
+                    ),
                 title: z.string().max(200).optional().describe('Required when creating; updates the title when given for a new version'),
                 description: z.string().max(1000).optional().describe('One-sentence summary shown in link previews'),
                 artifact_id: artifactId.optional(),

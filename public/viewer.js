@@ -94,6 +94,10 @@
     })
     copy?.addEventListener('click', copyLink)
 
+    // Decks navigate with the arrow keys, which only reach the iframe once it has focus.
+    const deck = document.querySelector('iframe[data-autofocus]')
+    deck?.addEventListener('load', () => deck.focus())
+
     document.querySelector('[data-fullscreen]')?.addEventListener('click', () => {
         document.querySelector('.viewer iframe')?.requestFullscreen?.().catch(() => {})
     })

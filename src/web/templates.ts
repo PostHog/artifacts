@@ -260,7 +260,7 @@ ${appBar({
 ${!isLatest
     ? html`<div class="banner">You're viewing version ${version.version}. People you share with only see the latest. <a href="/a/${artifact.id}">View latest (v${artifact.latest_version})</a></div>`
     : ''}
-<iframe src="${frameSrc}" title="${artifact.title}" sandbox="${SANDBOX}" allow="clipboard-write; fullscreen" referrerpolicy="no-referrer"></iframe>
+<iframe src="${frameSrc}" title="${artifact.title}" ${version.format === 'slides' ? raw('data-autofocus') : ''} sandbox="${SANDBOX}" allow="clipboard-write; fullscreen" referrerpolicy="no-referrer"></iframe>
 </div>
 <div class="toast" role="status" aria-live="polite"></div>
 <script src="/viewer.js" defer></script>`,

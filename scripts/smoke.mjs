@@ -305,6 +305,22 @@ res = await view(anon, `/a/${id}`)
 assert.equal(res.status, 302)
 step('unsharing and new versions revoke public access immediately')
 
+// Slides: HTML with one <section> per slide, served inside the deck viewer
+const deck = await call('publish_artifact', {
+    title: 'Smoke deck',
+    format: 'slides',
+    content: '<!doctype html><html><head><title>Deck</title></head><body><section><h1>One</h1></section><section><h1>Two</h1></section></body></html>',
+})
+res = await view(owner, `/a/${deck.id}`)
+const deckPage = await res.text()
+assert.match(deckPage, /<iframe [^>]*data-autofocus/, 'decks take focus for arrow-key navigation')
+res = await frame(owner, deckPage.match(/<iframe src="([^"]+)"/)[1].replaceAll('&amp;', '&'))
+const deckHtml = await res.text()
+assert.match(deckHtml, /^<!doctype html><html><head><style data-ph-deck>/, 'deck viewer injected at the top of <head>')
+assert.match(deckHtml, /<section><h1>Two<\/h1><\/section>/, 'slides served as written')
+await call('delete_artifact', { artifact_id: deck.id })
+step('slides: deck viewer wraps the author\'s sections')
+
 // MCP ownership checks: a second user's token can't touch this artifact (simulated via unknown id)
 const missing = await mcp('tools/call', { name: 'set_visibility', arguments: { artifact_id: 'A'.repeat(22), visibility: 'public' } })
 assert.ok(missing.isError)
