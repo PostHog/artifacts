@@ -294,7 +294,8 @@ pre.snippet {
 .error { color: var(--red); font-weight: 600; }
 .stack { display: flex; flex-direction: column; gap: 12px; }
 .row-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-input.text {
+input.text, textarea.text {
+    display: block;
     width: 100%;
     padding: 8px 10px;
     border: 1px solid var(--border-strong);
@@ -303,6 +304,8 @@ input.text {
     color: var(--text);
     font: inherit;
 }
+input.text::placeholder, textarea.text::placeholder { color: var(--text-muted); }
+input.text:focus, textarea.text:focus { outline: none; border-color: var(--orange); box-shadow: 0 0 0 3px var(--highlight); }
 
 table.list { width: 100%; border-collapse: collapse; }
 table.list td, table.list th { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
@@ -341,9 +344,11 @@ table.list .num { text-align: right; white-space: nowrap; color: var(--text-mute
 .card.flush { padding: 0; }
 .bar form { margin: 0; }
 
-.invite-box { display: flex; flex-direction: column; gap: 8px; margin: 0 0 8px 24px; }
+/* Sits under the "Specific people" card, lined up with the cards' edges (.choice margin). */
+.invite-box { display: flex; flex-direction: column; gap: 8px; margin: 0 4px 10px; }
 .invite-box[hidden] { display: none; }
-textarea.text { resize: vertical; min-height: 64px; font-size: 12px; }
+.invite-box .btn { align-self: flex-end; }
+textarea.text { resize: vertical; min-height: 72px; font-size: 13px; line-height: 1.4; }
 
 /* --- Comments ---------------------------------------------------------------- */
 .panel.comments { width: 340px; max-width: calc(100vw - 24px); max-height: 75vh; overflow-y: auto; }
