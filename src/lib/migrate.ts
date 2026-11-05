@@ -1,5 +1,7 @@
 import init from '../../migrations/0001_init.sql'
 import teamVisibility from '../../migrations/0002_team_visibility.sql'
+import invitedVisibility from '../../migrations/0003_invited_visibility.sql'
+import comments from '../../migrations/0004_comments.sql'
 
 /**
  * Schema migrations, applied by the Worker on first use in each isolate. Deploys are a plain
@@ -10,6 +12,8 @@ import teamVisibility from '../../migrations/0002_team_visibility.sql'
 const MIGRATIONS: [name: string, sql: string][] = [
     ['0001_init', init],
     ['0002_team_visibility', teamVisibility],
+    ['0003_invited_visibility', invitedVisibility],
+    ['0004_comments', comments],
 ]
 
 function statements(sql: string): string[] {

@@ -21,6 +21,8 @@
     "ALLOWED_EMAIL_DOMAIN": "posthog.com",
     // "Sign in with PostHog". US Cloud only: ID tokens are accepted solely from this issuer.
     "POSTHOG_OAUTH_HOST": "https://us.posthog.com",
+    // Invited viewers (customers) may also sign in with an EU Cloud account. Staff cannot.
+    "POSTHOG_EU_OAUTH_HOST": "https://eu.posthog.com",
     // https hosts MCP clients may receive tokens at, besides loopback (Claude Code etc.). See src/lib/policy.ts.
     "MCP_REDIRECT_HOSTS": "claude.ai,claude.com",
     // Only honoured when PUBLIC_URL is localhost, so it can't be switched on in production.
@@ -37,6 +39,8 @@
   // Abuse limits (per Cloudflare location). namespace_id is any account-unique integer string.
   "ratelimits": [
     { "name": "PUBLISH_LIMITER", "namespace_id": "4201", "simple": { "limit": 30, "period": 60 } },
-    { "name": "REGISTER_LIMITER", "namespace_id": "4202", "simple": { "limit": 10, "period": 60 } }
+    { "name": "REGISTER_LIMITER", "namespace_id": "4202", "simple": { "limit": 10, "period": 60 } },
+    // Comments, per commenter.
+    { "name": "COMMENT_LIMITER", "namespace_id": "4205", "simple": { "limit": 10, "period": 60 } }
   ]
 }

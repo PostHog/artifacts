@@ -13,12 +13,15 @@ export interface AppEnv {
     SESSION_SECRET: string
     /** PostHog OAuth server and the only ID-token issuer we accept; defaults to US Cloud, https://us.posthog.com. */
     POSTHOG_OAUTH_HOST: string
+    /** EU Cloud OAuth host, offered to invited viewers only (staff sign in through US Cloud). Default https://eu.posthog.com */
+    POSTHOG_EU_OAUTH_HOST?: string
     /** Comma-separated https hosts MCP clients may redirect to, besides loopback. Default: claude.ai,claude.com */
     MCP_REDIRECT_HOSTS: string
     /** Usage analytics (src/lib/analytics.ts). Empty token = off. */
     POSTHOG_PROJECT_TOKEN?: string
     POSTHOG_HOST?: string
     PUBLISH_LIMITER: RateLimit
+    COMMENT_LIMITER: RateLimit
     REGISTER_LIMITER: RateLimit
 }
 
@@ -28,6 +31,9 @@ export interface User {
     name: string
 }
 
-/** private: owner only. team: any signed-in PostHog staff member. public: anyone with the link. */
-export type Visibility = 'private' | 'team' | 'public'
+/**
+ * private: owner only. team: any signed-in PostHog staff member. invited: people on the artifact's email
+ * allowlist who sign in with their own PostHog account. public: anyone with the link.
+ */
+export type Visibility = 'private' | 'team' | 'invited' | 'public'
 export type Format = 'html' | 'markdown'

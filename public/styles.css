@@ -166,9 +166,11 @@ h1, h2, h3 { letter-spacing: -0.02em; line-height: 1.2; }
 }
 .pill.public { border-color: #b8d8a6; color: #3d6b29; background: #eef7e8; }
 .pill.team { border-color: #b5cdf5; color: #1d4f9c; background: #edf3fd; }
+.pill.invited { border-color: #e0c27a; color: #7a5200; background: #fdf4dc; }
 @media (prefers-color-scheme: dark) {
     .pill.public { border-color: #3d6b29; color: #b8d8a6; background: #1f2b19; }
     .pill.team { border-color: #1d4f9c; color: #b5cdf5; background: #17233a; }
+    .pill.invited { border-color: #7a5200; color: #e0c27a; background: #2e2410; }
 }
 
 /* --- Popovers (version picker, share) ------------------------------------- */
@@ -325,3 +327,18 @@ table.list .num { text-align: right; white-space: nowrap; color: var(--text-mute
 .hero-actions { margin-bottom: 32px; }
 .card.flush { padding: 0; }
 .bar form { margin: 0; }
+
+.invite-box { display: flex; flex-direction: column; gap: 8px; margin: 0 0 8px 24px; }
+.invite-box[hidden] { display: none; }
+textarea.text { resize: vertical; min-height: 64px; font-size: 12px; }
+
+/* --- Comments ---------------------------------------------------------------- */
+.panel.comments { width: 340px; max-width: calc(100vw - 24px); max-height: 75vh; overflow-y: auto; }
+.comment-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.comment { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; background: var(--bg); }
+.comment .row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.comment .body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; margin-top: 4px; }
+.comment form { margin-top: 4px; }
+.comment-settings { margin-bottom: 12px; }
+.small { font-size: 12px; }
+button.small { font-size: 12px; padding: 2px 6px; }

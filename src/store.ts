@@ -12,8 +12,21 @@ export interface Artifact {
     description: string | null
     visibility: Visibility
     latest_version: number
+    /** 1 when the owner has turned comments on. */
+    comments_enabled: number
     created_at: number
     updated_at: number
+}
+
+export interface Comment {
+    id: string
+    artifact_id: string
+    version: number
+    author_email: string
+    author_name: string
+    author_kind: 'staff' | 'guest'
+    body: string
+    created_at: number
 }
 
 export interface Version {
@@ -51,6 +64,53 @@ async function withCleanup<T>(env: AppEnv, key: string, write: () => Promise<T>)
 
 export function isOwner(artifact: Artifact, user: User | null): boolean {
     return !!user && artifact.owner_email.toLowerCase() === user.email.toLowerCase()
+}
+
+// Domain entries ('@acme.com') would let anyone with a free mailbox in, so they're refused for consumer providers.
+const CONSUMER_DOMAINS = new Set([
+    'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'yahoo.com', 'ymail.com',
+    'icloud.com', 'me.com', 'aol.com', 'proton.me', 'protonmail.com', 'gmx.com', 'gmx.net', 'mail.com', 'zoho.com', 'qq.com',
+])
+export const MAX_INVITES = 50
+
+/** Validates an allowlist: exact emails (`a@acme.com`) or a whole company domain (`@acme.com`). */
+export function normalizeInvites(list: string[]): string[] {
+    const out = new Set<string>()
+    for (const raw of list) {
+        const entry = raw.trim().toLowerCase()
+        if (!entry) continue
+        if (entry.startsWith('@')) {
+            if (!/^@[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(entry) || entry.length > 255) throw new StoreError('invalid', `"${raw}" is not a valid domain`)
+            if (CONSUMER_DOMAINS.has(entry.slice(1))) throw new StoreError('invalid', `${entry} is a consumer email provider; list individual addresses instead`)
+        } else if (!/^[^\s@,;<>"']+@[^\s@,;<>"']+\.[^\s@,;<>"']{2,}$/.test(entry) || entry.length > 254) {
+            throw new StoreError('invalid', `"${raw}" is not a valid email address`)
+        }
+        out.add(entry)
+    }
+    if (out.size > MAX_INVITES) throw new StoreError('invalid', `At most ${MAX_INVITES} entries`)
+    return [...out]
+}
+
+export async function listInvites(env: AppEnv, id: string): Promise<string[]> {
+    const { results } = await env.DB.prepare('SELECT pattern FROM artifact_invites WHERE artifact_id = ? ORDER BY pattern').bind(id).all<{ pattern: string }>()
+    return results.map((r) => r.pattern)
+}
+
+/** True if `email` is on the artifact's allowlist, by exact address or by its domain. */
+export async function isInvited(env: AppEnv, id: string, email: string): Promise<boolean> {
+    const lower = email.toLowerCase()
+    const domain = lower.split('@')[1]
+    if (!domain) return false
+    const row = await env.DB.prepare('SELECT 1 AS ok FROM artifact_invites WHERE artifact_id = ? AND pattern IN (?, ?)').bind(id, lower, `@${domain}`).first()
+    return !!row
+}
+
+function replaceInvitesStatements(env: AppEnv, id: string, patterns: string[]): D1PreparedStatement[] {
+    const now = Date.now()
+    return [
+        env.DB.prepare('DELETE FROM artifact_invites WHERE artifact_id = ?').bind(id),
+        ...patterns.map((p) => env.DB.prepare('INSERT INTO artifact_invites (artifact_id, pattern, created_at) VALUES (?, ?, ?)').bind(id, p, now)),
+    ]
 }
 
 export async function getArtifact(env: AppEnv, id: string): Promise<Artifact | null> {
@@ -102,6 +162,8 @@ interface PublishInput {
     format: Format
     note?: string
     visibility?: Visibility
+    /** Allowlist for visibility 'invited'. Replaces the existing list when given. */
+    invited?: string[]
 }
 
 /**
@@ -116,6 +178,10 @@ export async function publish(env: AppEnv, user: User, input: PublishInput): Pro
         throw new StoreError('too_large', `Content is ${bytes.byteLength} bytes; the limit is ${MAX_CONTENT_BYTES}`)
     }
     const title = input.title?.trim().slice(0, MAX_TITLE_LENGTH)
+    const invites = input.invited ? normalizeInvites(input.invited) : undefined
+    if (input.visibility === 'invited' && !invites?.length && !input.artifactId) {
+        throw new StoreError('invalid', 'Visibility "invited" needs at least one email or domain in invited_emails')
+    }
     const sha256 = await sha256Hex(bytes)
     const now = Date.now()
     const email = user.email.toLowerCase()
@@ -133,6 +199,7 @@ export async function publish(env: AppEnv, user: User, input: PublishInput): Pro
             env.DB.prepare(
                 'INSERT INTO versions (artifact_id, version, format, size, sha256, object_key, note, created_at) VALUES (?, 1, ?, ?, ?, ?, ?, ?)'
             ).bind(id, input.format, bytes.byteLength, sha256, key, input.note ?? null, now),
+            ...(invites ? replaceInvitesStatements(env, id, invites) : []),
         ]))
         return {
             artifact: (await getArtifact(env, id))!,
@@ -143,6 +210,9 @@ export async function publish(env: AppEnv, user: User, input: PublishInput): Pro
     // Optimistic concurrency: retry if another publish claimed the same version number.
     for (let attempt = 0; attempt < 3; attempt++) {
         const artifact = await getOwnedArtifact(env, input.artifactId, user)
+        if (input.visibility === 'invited' && !invites?.length && !(await listInvites(env, artifact.id)).length) {
+            throw new StoreError('invalid', 'Visibility "invited" needs at least one email or domain in invited_emails')
+        }
         const next = artifact.latest_version + 1
         const key = newObjectKey(artifact.id)
         await env.BUCKET.put(key, bytes, {
@@ -160,6 +230,7 @@ export async function publish(env: AppEnv, user: User, input: PublishInput): Pro
                 ).bind(next, now, title || null, input.description ?? null, input.visibility ?? null, artifact.id, artifact.latest_version),
             ])
             if (update?.meta.changes === 1) {
+                if (invites) await env.DB.batch(replaceInvitesStatements(env, artifact.id, invites))
                 return {
                     artifact: (await getArtifact(env, artifact.id))!,
                     version: (await getVersion(env, artifact.id, next))!,
@@ -177,9 +248,20 @@ export async function publish(env: AppEnv, user: User, input: PublishInput): Pro
     throw new StoreError('conflict', 'The artifact was updated concurrently; please retry')
 }
 
-export async function setVisibility(env: AppEnv, user: User, id: string, visibility: Visibility): Promise<Artifact> {
+/**
+ * `invited` replaces the allowlist when given. Switching to 'invited' needs a non-empty list, either passed
+ * now or kept from earlier. The list survives a switch away so toggling back doesn't lose it.
+ */
+export async function setVisibility(env: AppEnv, user: User, id: string, visibility: Visibility, invited?: string[]): Promise<Artifact> {
     await getOwnedArtifact(env, id, user)
-    await env.DB.prepare('UPDATE artifacts SET visibility = ? WHERE id = ?').bind(visibility, id).run()
+    const invites = invited ? normalizeInvites(invited) : undefined
+    if (visibility === 'invited' && !invites?.length && !(await listInvites(env, id)).length) {
+        throw new StoreError('invalid', 'Add at least one email address or domain to share with specific people')
+    }
+    await env.DB.batch([
+        ...(invites ? replaceInvitesStatements(env, id, invites) : []),
+        env.DB.prepare('UPDATE artifacts SET visibility = ? WHERE id = ?').bind(visibility, id),
+    ])
     return (await getArtifact(env, id))!
 }
 
@@ -197,11 +279,76 @@ export async function updateMetadata(
     return (await getArtifact(env, id))!
 }
 
+// --- Comments ----------------------------------------------------------------------
+
+export const MAX_COMMENT_LENGTH = 2000
+export const MAX_COMMENTS_PER_ARTIFACT = 500
+
+/** Who is commenting: a signed-in PostHog user, or an invited viewer. */
+export interface Commenter {
+    email: string
+    name: string
+    kind: 'staff' | 'guest'
+}
+
+export async function listComments(env: AppEnv, id: string): Promise<Comment[]> {
+    const { results } = await env.DB.prepare('SELECT * FROM comments WHERE artifact_id = ? ORDER BY created_at ASC LIMIT ?')
+        .bind(id, MAX_COMMENTS_PER_ARTIFACT)
+        .all<Comment>()
+    return results
+}
+
+export async function countComments(env: AppEnv, id: string): Promise<number> {
+    return (await env.DB.prepare('SELECT COUNT(*) AS n FROM comments WHERE artifact_id = ?').bind(id).first<{ n: number }>())?.n ?? 0
+}
+
+/** Stored as plain text and only ever rendered escaped. The caller has already decided this person may comment. */
+export async function addComment(env: AppEnv, artifact: Artifact, author: Commenter, body: string): Promise<Comment> {
+    const text = body.replace(/\r\n/g, '\n').trim()
+    if (!text) throw new StoreError('invalid', 'Write something first')
+    if (text.length > MAX_COMMENT_LENGTH) throw new StoreError('too_large', `Comments are limited to ${MAX_COMMENT_LENGTH} characters`)
+    if ((await countComments(env, artifact.id)) >= MAX_COMMENTS_PER_ARTIFACT) throw new StoreError('too_large', 'This artifact has reached its comment limit')
+    const comment: Comment = {
+        id: randomId(),
+        artifact_id: artifact.id,
+        version: artifact.latest_version,
+        author_email: author.email.toLowerCase(),
+        author_name: author.name.slice(0, 100),
+        author_kind: author.kind,
+        body: text,
+        created_at: Date.now(),
+    }
+    await env.DB.prepare(
+        'INSERT INTO comments (id, artifact_id, version, author_email, author_name, author_kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    )
+        .bind(comment.id, comment.artifact_id, comment.version, comment.author_email, comment.author_name, comment.author_kind, comment.body, comment.created_at)
+        .run()
+    return comment
+}
+
+/** The author can delete their own comment, and the artifact's owner can delete any. Returns whether a row was removed. */
+export async function deleteComment(env: AppEnv, artifact: Artifact, commentId: string, actor: { email: string; kind: 'staff' | 'guest'; owner: boolean }): Promise<boolean> {
+    const comment = await env.DB.prepare('SELECT * FROM comments WHERE id = ? AND artifact_id = ?').bind(commentId, artifact.id).first<Comment>()
+    if (!comment) return false
+    const isAuthor = comment.author_kind === actor.kind && comment.author_email === actor.email.toLowerCase()
+    if (!isAuthor && !actor.owner) return false
+    await env.DB.prepare('DELETE FROM comments WHERE id = ?').bind(commentId).run()
+    return true
+}
+
+export async function setCommentsEnabled(env: AppEnv, user: User, id: string, enabled: boolean): Promise<Artifact> {
+    await getOwnedArtifact(env, id, user)
+    await env.DB.prepare('UPDATE artifacts SET comments_enabled = ? WHERE id = ?').bind(enabled ? 1 : 0, id).run()
+    return (await getArtifact(env, id))!
+}
+
 export async function deleteArtifact(env: AppEnv, user: User, id: string): Promise<void> {
     await getOwnedArtifact(env, id, user)
     const keys = (await listVersions(env, id)).map((v) => v.object_key)
     await env.DB.batch([
         env.DB.prepare('DELETE FROM versions WHERE artifact_id = ?').bind(id),
+        env.DB.prepare('DELETE FROM artifact_invites WHERE artifact_id = ?').bind(id),
+        env.DB.prepare('DELETE FROM comments WHERE artifact_id = ?').bind(id),
         env.DB.prepare('DELETE FROM artifacts WHERE id = ?').bind(id),
     ])
     if (keys.length) await env.BUCKET.delete(keys)

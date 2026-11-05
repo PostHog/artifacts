@@ -1,7 +1,8 @@
 import { Marked } from 'marked'
 import type { AppEnv } from '../env'
 import { openToken, sealToken } from '../lib/crypto'
-import { getArtifact, getContent, getVersion } from '../store'
+import { isRevoked } from '../lib/session'
+import { getArtifact, getContent, getVersion, isInvited } from '../store'
 
 // The iframe loads once per page view, so a grant only needs to outlive that load. Short-lived
 // grants also limit the damage if someone copies the content URL instead of the share link.
@@ -21,10 +22,12 @@ interface FrameGrant {
     pub?: boolean
     /** Issued to a non-owner staff member via team sharing: re-checked on every load, like pub. */
     team?: boolean
+    /** Issued to an invited viewer (their email): re-checked against the allowlist on every load. */
+    guest?: string
 }
 
 /** How the viewer got access: as the owner, or as someone the artifact is shared with. */
-export type FrameAccess = 'owner' | 'team' | 'public'
+export type FrameAccess = 'owner' | 'team' | 'invited' | 'public'
 
 export const contentOrigin = (env: AppEnv) => new URL(env.CONTENT_URL || env.PUBLIC_URL).origin
 
@@ -33,8 +36,14 @@ export const contentOrigin = (env: AppEnv) => new URL(env.CONTENT_URL || env.PUB
  * a short-lived signed URL. The content route then needs no session, which keeps it working on
  * a separate content origin where the session cookie is never sent.
  */
-export async function frameUrl(env: AppEnv, id: string, version: number, access: FrameAccess): Promise<string> {
-    const grant: FrameGrant = { id, v: version, ...(access === 'public' && { pub: true }), ...(access === 'team' && { team: true }) }
+export async function frameUrl(env: AppEnv, id: string, version: number, access: FrameAccess, guestEmail?: string): Promise<string> {
+    const grant: FrameGrant = {
+        id,
+        v: version,
+        ...(access === 'public' && { pub: true }),
+        ...(access === 'team' && { team: true }),
+        ...(access === 'invited' && guestEmail && { guest: guestEmail }),
+    }
     const token = await sealToken(env.SESSION_SECRET, 'frame', grant, FRAME_TOKEN_TTL)
     return `${contentOrigin(env)}/c/${id}/${version}?t=${encodeURIComponent(token)}`
 }
@@ -70,6 +79,14 @@ export async function serveContent(env: AppEnv, request: Request, id: string, ve
         const allowed = grant.pub ? ['public'] : ['team', 'public']
         const artifact = await getArtifact(env, id)
         if (!artifact || !allowed.includes(artifact.visibility) || artifact.latest_version !== version) {
+            return refuse(404, 'This artifact is no longer shared.')
+        }
+    }
+    if (grant.guest) {
+        // No session reaches this route, so the grant carries the address. Re-check the allowlist, so removing
+        // someone, unsharing, or publishing a new version cuts them off within a page load.
+        const artifact = await getArtifact(env, id)
+        if (!artifact || artifact.visibility !== 'invited' || artifact.latest_version !== version || !(await isInvited(env, id, grant.guest)) || (await isRevoked(env, grant.guest))) {
             return refuse(404, 'This artifact is no longer shared.')
         }
     }

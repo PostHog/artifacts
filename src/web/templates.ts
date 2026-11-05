@@ -2,7 +2,7 @@ import type { ConsentDescription } from '@cloudflare/workers-oauth-provider'
 import { html, raw } from 'hono/html'
 import type { HtmlEscapedString } from 'hono/utils/html'
 import type { User } from '../env'
-import type { Artifact, Version } from '../store'
+import type { Artifact, Comment, Commenter, Version } from '../store'
 import { SANDBOX } from './content'
 
 type Html = HtmlEscapedString | Promise<HtmlEscapedString>
@@ -58,12 +58,12 @@ function userMenu(user: User | null, next: string) {
     return html`<a class="avatar" href="/" title="${user.name} (${user.email}) — your artifacts">${initials(user)}</a>`
 }
 
-export function appBar({ user, next, center, actions }: { user: User | null; next: string; center?: Html; actions?: Html }) {
+export function appBar({ user, next, center, actions, menu }: { user: User | null; next: string; center?: Html; actions?: Html; menu?: Html }) {
     return html`<header class="bar">
   <a class="brand" href="/">${logo}<span class="product">Artifacts</span></a>
   <span class="sep"></span>
   <div class="title">${center ?? ''}</div>
-  <div class="actions">${actions ?? ''}${userMenu(user, next)}</div>
+  <div class="actions">${actions ?? ''}${menu ?? userMenu(user, next)}</div>
 </header>`
 }
 
@@ -99,14 +99,74 @@ const teamIcon = raw(
     '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></svg>'
 )
 
+const mailIcon = raw(
+    '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>'
+)
+
 export function visibilityPill(visibility: Artifact['visibility']) {
     if (visibility === 'public') return html`<span class="pill public" data-visibility-pill>${globeIcon} Public</span>`
     if (visibility === 'team') return html`<span class="pill team" data-visibility-pill>${teamIcon} PostHog</span>`
+    if (visibility === 'invited') return html`<span class="pill invited" data-visibility-pill>${mailIcon} Invited</span>`
     return html`<span class="pill" data-visibility-pill>${lockIcon} Private</span>`
 }
 
+export interface CommentsView {
+    enabled: boolean
+    items: Comment[]
+    /** Who the viewer would comment as, or null if they can only read. */
+    me: Commenter | null
+    owner: boolean
+    open: boolean
+    error?: string
+}
+
+function commentsPanel(artifact: Artifact, { enabled, items, me, owner, open, error }: CommentsView) {
+    const canDelete = (c: Comment) => owner || (!!me && c.author_kind === me.kind && c.author_email === me.email)
+    return html`<details class="pop" data-close-outside ${open ? 'open' : ''}>
+    <summary class="btn secondary"><span>Comments${enabled ? ` (${items.length})` : ''}</span></summary>
+    <div class="panel right comments" id="comments">
+      <h3>Comments</h3>
+      ${owner
+          ? html`<form method="post" action="/a/${artifact.id}/comments/settings" class="comment-settings">
+        <input type="hidden" name="enabled" value="${enabled ? '0' : '1'}">
+        <p class="hint">${enabled ? 'On. ' : 'Off. '}Comments are visible to everyone who can open this artifact and is signed in (PostHog staff, and invited people), never to anonymous link viewers.</p>
+        <button class="btn secondary" type="submit"><span>${enabled ? 'Turn comments off' : 'Turn comments on'}</span></button>
+      </form>`
+          : ''}
+      ${enabled
+          ? html`${error ? html`<p class="error small">${error}</p>` : ''}
+      <ul class="comment-list">
+        ${items.length
+            ? items.map(
+                  (c) => html`<li class="comment">
+          <div class="row"><strong title="${owner ? c.author_email : ''}">${c.author_name}</strong>
+            <span class="muted small">${relativeTime(c.created_at)}${c.version !== artifact.latest_version ? ` · on v${c.version}` : ''}</span></div>
+          <div class="body">${c.body}</div>
+          ${canDelete(c)
+              ? html`<form method="post" action="/a/${artifact.id}/comments/${c.id}/delete"><button class="ghost small" type="submit">Delete</button></form>`
+              : ''}
+        </li>`
+              )
+            : html`<li class="hint">No comments yet.</li>`}
+      </ul>
+      ${me
+          ? html`<form method="post" action="/a/${artifact.id}/comments" class="stack">
+        <textarea class="text" name="body" rows="3" maxlength="2000" placeholder="Add a comment" aria-label="Comment" required></textarea>
+        <button class="btn" type="submit"><span>Post comment</span></button>
+      </form>`
+          : html`<p class="hint">Sign in to comment.</p>`}`
+          : ''}
+    </div>
+  </details>`
+}
+
 interface ViewerOptions {
+    comments: CommentsView | null
     user: User | null
+    /** Email of an invited viewer (not a PostHog user), when that's how this page is being viewed. */
+    guest: string | null
+    /** The allowlist, shown to the owner only. */
+    invites: string[]
     artifact: Artifact
     versions: Version[]
     version: Version
@@ -115,7 +175,7 @@ interface ViewerOptions {
     shareUrl: string
 }
 
-export function viewerPage({ user, artifact, versions, version, owner, frameSrc, shareUrl }: ViewerOptions) {
+export function viewerPage({ comments, user, guest, invites, artifact, versions, version, owner, frameSrc, shareUrl }: ViewerOptions) {
     const isLatest = version.version === artifact.latest_version
     const author = artifact.owner_name ?? artifact.owner_email
 
@@ -150,6 +210,14 @@ export function viewerPage({ user, artifact, versions, version, owner, frameSrc,
           <span><strong>PostHog team</strong><small>Anyone signed in with a @posthog.com account can view the latest version. Signed-out visitors can't.</small></span>
         </label>
         <label class="choice">
+          <input type="radio" name="visibility" value="invited" ${artifact.visibility === 'invited' ? 'checked' : ''}>
+          <span><strong>Specific people</strong><small>Only the emails or company domains you list. They sign in with their own PostHog account (US or EU Cloud).</small></span>
+        </label>
+        <div class="invite-box" data-invite-box ${artifact.visibility === 'invited' ? '' : 'hidden'}>
+          <textarea class="text" rows="3" maxlength="4000" placeholder="ana@acme.com, @acme.com" aria-label="Emails or company domains, separated by commas or new lines" data-invite-list>${invites.join('\n')}</textarea>
+          <button class="btn secondary" type="button" data-invite-save><span>Save list</span></button>
+        </div>
+        <label class="choice">
           <input type="radio" name="visibility" value="public" ${artifact.visibility === 'public' ? 'checked' : ''}>
           <span><strong>Anyone with the link</strong><small>Anyone with the link can view the latest version. Links can't be guessed.</small></span>
         </label>
@@ -165,10 +233,11 @@ export function viewerPage({ user, artifact, versions, version, owner, frameSrc,
     const center = html`<h1 title="${artifact.title}">${artifact.title}</h1>
   ${versionPicker}
   ${owner ? visibilityPill(artifact.visibility) : ''}
-  ${owner ? (['private', 'team', 'public'] as const).map((v) => html`<template data-pill="${v}">${visibilityPill(v)}</template>`) : ''}
+  ${owner ? (['private', 'team', 'invited', 'public'] as const).map((v) => html`<template data-pill="${v}">${visibilityPill(v)}</template>`) : ''}
   <span class="meta">${owner ? 'Updated' : 'By ' + author + ' ·'} ${relativeTime(isLatest ? artifact.updated_at : version.created_at)}</span>`
 
     const actions = html`<button class="ghost hide-sm" type="button" data-fullscreen title="Full screen">${expandIcon}</button>
+  ${comments ? commentsPanel(artifact, comments) : ''}
   ${share}`
 
     return layout({
@@ -179,7 +248,15 @@ export function viewerPage({ user, artifact, versions, version, owner, frameSrc,
                 ? { title: artifact.title, description: artifact.description ?? `Shared by ${author}`, url: shareUrl }
                 : undefined,
         body: html`<div class="viewer">
-${appBar({ user, next: `/a/${artifact.id}`, center, actions })}
+${appBar({
+    user,
+    next: `/a/${artifact.id}`,
+    center,
+    actions,
+    menu: guest
+        ? html`<form method="post" action="/a/${artifact.id}/signout"><button class="ghost" type="submit" title="Signed in as ${guest}">Sign out</button></form>`
+        : undefined,
+})}
 ${!isLatest
     ? html`<div class="banner">You're viewing version ${version.version}. People you share with only see the latest. <a href="/a/${artifact.id}">View latest (v${artifact.latest_version})</a></div>`
     : ''}
@@ -187,6 +264,24 @@ ${!isLatest
 </div>
 <div class="toast" role="status" aria-live="polite"></div>
 <script src="/viewer.js" defer></script>`,
+    })
+}
+
+export function guestGatePage({ id, error }: { id: string; error?: string }) {
+    // Nothing here names the artifact or its author: the page looks the same for every invited artifact.
+    return layout({
+        title: 'View document · PostHog Artifacts',
+        body: html`${appBar({ user: null, next: `/a/${id}`, menu: html`` })}
+<main class="page narrow">
+  <h1>Sign in to view this document</h1>
+  <p class="lede">This was shared with specific people. Sign in with your PostHog account to continue.</p>
+  ${error ? html`<p class="error">${error}</p>` : ''}
+  <div class="stack">
+    <a class="btn lg" href="/a/${id}/signin/us"><span>Continue with PostHog US Cloud</span></a>
+    <a class="btn lg secondary" href="/a/${id}/signin/eu"><span>Continue with PostHog EU Cloud</span></a>
+  </div>
+  <p class="small muted spaced">Use the account whose email address the document was shared with. You'll only see it if that address is on the list.</p>
+</main>`,
     })
 }
 
