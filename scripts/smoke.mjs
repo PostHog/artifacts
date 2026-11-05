@@ -157,7 +157,7 @@ assert.equal(init.serverInfo.name, 'posthog-artifacts')
 const { tools } = await mcp('tools/list', {})
 assert.deepEqual(
     tools.map((t) => t.name).sort(),
-    ['delete_artifact', 'get_artifact', 'list_artifacts', 'publish_artifact', 'set_visibility', 'update_artifact']
+    ['delete_artifact', 'get_artifact', 'list_artifacts', 'list_comments', 'publish_artifact', 'set_visibility', 'update_artifact']
 )
 step(`MCP initialize + tools/list (${tools.length} tools)`)
 
@@ -434,6 +434,115 @@ res = await view(bob, `/a/${inv.id}`)
 assert.match(await res.text(), /Sign in to view this document/, 'sign out ends the guest session')
 await call('delete_artifact', { artifact_id: inv.id })
 step('invited: allowlist edits, new versions, unsharing and sign-out all take effect immediately')
+
+// --- Comments -------------------------------------------------------------------------
+const cm = await call('publish_artifact', { title: 'Commentable', format: 'html', content: '<h1>Discuss me</h1>', visibility: 'team' })
+const commentIds = async (jar) => [...(await (await view(jar, `/a/${cm.id}`)).text()).matchAll(new RegExp(`/a/${cm.id}/comments/([0-9A-Za-z]{22})/delete`, 'g'))].map((m) => m[1])
+const post = (jar, body, headers) => form(jar, `/a/${cm.id}/comments`, { body }, headers)
+
+// Off by default: nothing appears for viewers, nothing can be posted, and only the owner sees the switch.
+res = await view(other, `/a/${cm.id}`)
+assert.ok(!(await res.text()).includes('Comments'), 'no comment UI while comments are off')
+res = await post(other, 'hello')
+assert.equal(res.status, 404, 'cannot comment while off')
+res = await view(owner, `/a/${cm.id}`)
+assert.match(await res.text(), /Turn comments on/)
+res = await form(other, `/a/${cm.id}/comments/settings`, { enabled: '1' })
+assert.equal(res.status, 404, 'non-owners cannot turn comments on')
+res = await form(anon, `/a/${cm.id}/comments/settings`, { enabled: '1' })
+assert.equal(res.status, 401)
+res = await form(owner, `/a/${cm.id}/comments/settings`, { enabled: '1' }, { Origin: 'https://evil.example' })
+assert.equal(res.status, 403, 'cross-site settings change refused')
+res = await form(owner, `/a/${cm.id}/comments/settings`, { enabled: '1' })
+assert.equal(res.status, 302)
+step('comments: off by default, owner-only switch')
+
+// Staff on a team artifact comment; text is escaped.
+res = await post(other, '<img src=x onerror=alert(1)> first thought')
+assert.equal(res.status, 302)
+assert.match(res.headers.get('Location'), /c=1$/)
+res = await view(other, `/a/${cm.id}?c=1`)
+let cpage = await res.text()
+assert.ok(cpage.includes('&lt;img src=x onerror=alert(1)&gt; first thought'), 'comment body is escaped')
+assert.ok(!cpage.includes('<img src=x onerror'), 'no raw markup from comments')
+assert.match(cpage, /Comments \(1\)/)
+res = await post(other, '   ')
+assert.match(res.headers.get('Location'), /cerr=empty/)
+res = await post(other, 'x'.repeat(2001))
+assert.match(res.headers.get('Location'), /cerr=long/)
+res = await post(other, 'hi', { Origin: 'https://evil.example' })
+assert.equal(res.status, 403, 'cross-site comment refused')
+step('comments: staff can comment on a team artifact; escaped, validated, same-origin only')
+
+// Anonymous link viewers get no comments and can't write any.
+await call('set_visibility', { artifact_id: cm.id, visibility: 'public' })
+res = await view(anon, `/a/${cm.id}`)
+assert.ok(!(await res.text()).includes('Comments'), 'public link viewers see no comment panel')
+res = await post(anon, 'drive-by')
+assert.equal(res.status, 404)
+res = await view(other, `/a/${cm.id}`)
+assert.match(await res.text(), /Comments \(1\)/, 'signed-in staff still see them on a public artifact')
+step('comments: anonymous link viewers see and write nothing')
+
+// Private artifact: nobody but the owner.
+await call('set_visibility', { artifact_id: cm.id, visibility: 'private' })
+res = await post(other, 'sneaky')
+assert.equal(res.status, 404)
+res = await post(owner, 'owner note')
+assert.equal(res.status, 302)
+assert.equal((await commentIds(owner)).length, 2)
+
+// Delete rules: authors delete their own, the owner deletes anything, others can't.
+await call('set_visibility', { artifact_id: cm.id, visibility: 'team' })
+const [first, second] = await commentIds(owner)
+res = await form(other, `/a/${cm.id}/comments/${second}/delete`, {})
+assert.equal(res.status, 302)
+assert.equal((await commentIds(owner)).length, 2, "a staff member can't delete someone else's comment")
+res = await form(other, `/a/${cm.id}/comments/${first}/delete`, {})
+assert.equal((await commentIds(owner)).length, 1, 'authors can delete their own')
+res = await form(owner, `/a/${cm.id}/comments/${second}/delete`, {})
+assert.equal((await commentIds(owner)).length, 0, 'the owner can delete any comment')
+step('comments: private is owner-only; delete rules')
+
+// Invited artifact: guests comment, labelled without their email; removal from the list stops them.
+await call('set_visibility', { artifact_id: cm.id, visibility: 'invited', invited_emails: ['ana@acme.com', 'bob@globex.com'] })
+const gAna = await guestLogin('ana@acme.com')
+const gBob = await guestLogin('bob@globex.com')
+res = await form(gAna, `/a/${cm.id}/comments`, { body: 'From Ana' })
+assert.equal(res.status, 302)
+cpage = await (await view(gBob, `/a/${cm.id}?c=1`)).text()
+assert.match(cpage, /From Ana/)
+assert.match(cpage, /ana \(guest\)/)
+assert.ok(!cpage.includes('ana@acme.com'), "guests don't see each other's email addresses")
+cpage = await (await view(owner, `/a/${cm.id}?c=1`)).text()
+assert.ok(cpage.includes('title="ana@acme.com"'), 'the owner can see who wrote it')
+const anaComment = (await commentIds(gAna))[0]
+res = await form(gBob, `/a/${cm.id}/comments/${anaComment}/delete`, {})
+assert.equal((await commentIds(owner)).length, 1, "a guest can't delete another guest's comment")
+res = await form(stranger, `/a/${cm.id}/comments`, { body: 'not on the list' })
+assert.equal(res.status, 404, 'a PostHog account that is not on the list cannot comment')
+res = await form(other, `/a/${cm.id}/comments`, { body: 'staff, not owner' })
+assert.equal(res.status, 404, 'staff who are not the owner or listed cannot comment on an invited artifact')
+await call('set_visibility', { artifact_id: cm.id, visibility: 'invited', invited_emails: ['bob@globex.com'] })
+res = await form(gAna, `/a/${cm.id}/comments`, { body: 'still here?' })
+assert.equal(res.status, 404, 'removed from the list: no more comments')
+step('comments: guests comment as "name (guest)"; the allowlist gates writing too')
+
+// MCP: the owner can read comments, and turning them off hides them without deleting.
+const listed2 = await call('list_comments', { artifact_id: cm.id })
+assert.equal(listed2.comments.length, 1)
+assert.equal(listed2.comments[0].kind, 'guest')
+assert.equal(listed2.comments[0].email, 'ana@acme.com')
+const off = await call('update_artifact', { artifact_id: cm.id, comments_enabled: false })
+assert.equal(off.comments_enabled, false)
+cpage = await (await view(gBob, `/a/${cm.id}`)).text()
+assert.ok(!cpage.includes('Comments') && !cpage.includes('From Ana'), 'comments hidden when off')
+res = await form(gBob, `/a/${cm.id}/comments`, { body: 'nope' })
+assert.equal(res.status, 404)
+await call('update_artifact', { artifact_id: cm.id, comments_enabled: true })
+assert.equal((await call('list_comments', { artifact_id: cm.id })).comments.length, 1, 'turning comments off keeps them')
+await call('delete_artifact', { artifact_id: cm.id })
+step('comments: MCP list_comments / update_artifact; off hides, does not delete')
 
 // --- Security regressions ---------------------------------------------------
 // Open redirect: browsers strip tabs, so /<TAB>/evil.example would become //evil.example

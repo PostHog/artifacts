@@ -18,6 +18,7 @@ export interface AppEnv {
     /** Comma-separated https hosts MCP clients may redirect to, besides loopback. Default: claude.ai,claude.com */
     MCP_REDIRECT_HOSTS: string
     PUBLISH_LIMITER: RateLimit
+    COMMENT_LIMITER: RateLimit
     REGISTER_LIMITER: RateLimit
 }
 

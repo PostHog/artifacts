@@ -1,13 +1,15 @@
 import { AuthorizationError, CimdFetchError } from '@cloudflare/workers-oauth-provider'
 import { Hono, type Context } from 'hono'
 import type { AppEnv, User } from '../env'
+import type { Artifact } from '../store'
 import { deriveSecret } from '../lib/crypto'
 import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/policy'
 import { clearGuestCookie, getGuest, guestCookie, normalizeEmail } from '../lib/guest'
 import { LoginError, beginPostHogLogin, clientMetadata, finishPostHogLogin, loginErrorMessage } from '../lib/posthog-oauth'
 import { clearSessionCookie, getUser, isAllowedEmail, isLocal, isRevoked, safeNext, serializeCookie, sessionCookie } from '../lib/session'
-import { StoreError, getArtifact, getVersion, isInvited, isOwner, listArtifacts, listInvites, listVersions, setVisibility, shareUrl } from '../store'
+import { type Commenter, StoreError, addComment, deleteComment, getArtifact, getVersion, isInvited, isOwner, listArtifacts, listComments, listInvites, listVersions, setCommentsEnabled, setVisibility, shareUrl } from '../store'
 import { contentOrigin, frameUrl, serveContent } from './content'
+import type { CommentsView } from './templates'
 import { consentPage, guestGatePage, homePage, loginPage, messagePage, viewerPage } from './templates'
 
 type Env = { Bindings: AppEnv; Variables: { user: User | null } }
@@ -214,6 +216,40 @@ app.post('/authorize', async (c) => {
 
 // --- Artifacts -----------------------------------------------------------------
 
+// --- Comments ---------------------------------------------------------------------
+
+/**
+ * Who a request may comment as on this artifact, or null. Mirrors who can view it, minus anonymous visitors
+ * (a public link carries no identity): the owner; a signed-in staff member on team and public artifacts; an
+ * invited guest on an invited one. Private artifacts take no comments from anyone but the owner.
+ */
+function commenterFor(artifact: Artifact, user: User | null, guest: string | null, owner: boolean): Commenter | null {
+    if (owner && user) return { email: user.email, name: user.name, kind: 'staff' }
+    if (artifact.visibility === 'invited') return guest ? { email: guest, name: `${guest.split('@')[0]} (guest)`, kind: 'guest' } : null
+    if (artifact.visibility === 'private') return null
+    return user ? { email: user.email, name: user.name, kind: 'staff' } : null
+}
+
+async function commenterFromRequest(c: Context<Env>, artifact: Artifact): Promise<{ me: Commenter; owner: boolean } | null> {
+    const user = c.get('user')
+    const owner = isOwner(artifact, user)
+    let guest: string | null = null
+    if (!owner && artifact.visibility === 'invited') {
+        guest = await getGuest(c.env, c.req.raw)
+        // Re-checked here, not trusted from the cookie: removing someone from the list stops their comments too.
+        if (!guest || !(await isInvited(c.env, artifact.id, guest))) return null
+    }
+    const me = commenterFor(artifact, user, guest, owner)
+    return me ? { me, owner } : null
+}
+
+const COMMENT_ERRORS: Record<string, string> = {
+    empty: 'Write something first.',
+    long: 'That comment is too long.',
+    full: 'This artifact has reached its comment limit.',
+    slow: 'Too many comments. Wait a minute and try again.',
+}
+
 /** What a visitor sees at an invited artifact until they've signed in as someone on the list. Shows nothing about the artifact. */
 function guestGate(c: Context<Env>, id: string) {
     c.header('Cache-Control', 'no-store')
@@ -249,6 +285,21 @@ app.get('/a/:id', async (c) => {
     const version = Number.isInteger(requested) ? await getVersion(c.env, artifact.id, requested) : null
     if (!version) return owner ? c.redirect(`/a/${artifact.id}`) : notFound(c)
 
+    // Owners see the comment controls even when comments are off (to turn them on). Everyone else sees the panel
+    // only when comments are on and they're signed in as someone who can comment: anonymous link viewers see none.
+    const me = commenterFor(artifact, user, guest, owner)
+    const commentsView: CommentsView | null =
+        owner || (artifact.comments_enabled && me)
+            ? {
+                  enabled: !!artifact.comments_enabled,
+                  items: artifact.comments_enabled ? await listComments(c.env, artifact.id) : [],
+                  me,
+                  owner,
+                  open: c.req.query('c') === '1',
+                  error: COMMENT_ERRORS[c.req.query('cerr') ?? ''],
+              }
+            : null
+
     c.header('Cache-Control', 'private, no-store')
     const access = owner ? 'owner' : artifact.visibility === 'team' ? 'team' : artifact.visibility === 'invited' ? 'invited' : 'public'
     return c.html(
@@ -258,6 +309,7 @@ app.get('/a/:id', async (c) => {
             artifact,
             versions: owner ? await listVersions(c.env, artifact.id, 100) : [],
             invites: owner ? await listInvites(c.env, artifact.id) : [],
+            comments: commentsView,
             version,
             owner,
             frameSrc: await frameUrl(c.env, artifact.id, version.version, access, guest ?? undefined),
@@ -314,6 +366,47 @@ app.post('/a/:id/visibility', async (c) => {
         if (error instanceof StoreError) return error.code === 'invalid' ? c.text(error.message, 400) : c.text('Not found', 404)
         throw error
     }
+})
+
+app.post('/a/:id/comments', async (c) => {
+    if (!sameOrigin(c)) return c.text('Forbidden', 403)
+    const artifact = await getArtifact(c.env, c.req.param('id'))
+    if (!artifact || !artifact.comments_enabled) return notFound(c)
+    const who = await commenterFromRequest(c, artifact)
+    if (!who) return notFound(c)
+    const back = (error?: string) => c.redirect(`/a/${artifact.id}?c=1${error ? `&cerr=${error}` : ''}`)
+    const { success } = await c.env.COMMENT_LIMITER.limit({ key: `${who.me.kind}:${who.me.email}` })
+    if (!success) return back('slow')
+    try {
+        await addComment(c.env, artifact, who.me, String((await c.req.formData()).get('body') ?? ''))
+    } catch (error) {
+        if (!(error instanceof StoreError)) throw error
+        return back(error.code === 'invalid' ? 'empty' : error.message.includes('limit') && !error.message.includes('characters') ? 'full' : 'long')
+    }
+    return back()
+})
+
+app.post('/a/:id/comments/settings', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.text('Sign in required', 401)
+    if (!sameOrigin(c)) return c.text('Forbidden', 403)
+    try {
+        await setCommentsEnabled(c.env, user, c.req.param('id'), String((await c.req.formData()).get('enabled')) === '1')
+    } catch (error) {
+        if (error instanceof StoreError) return c.text('Not found', 404)
+        throw error
+    }
+    return c.redirect(`/a/${c.req.param('id')}?c=1`)
+})
+
+app.post('/a/:id/comments/:commentId/delete', async (c) => {
+    if (!sameOrigin(c)) return c.text('Forbidden', 403)
+    const artifact = await getArtifact(c.env, c.req.param('id'))
+    if (!artifact) return notFound(c)
+    const who = await commenterFromRequest(c, artifact)
+    if (!who) return notFound(c)
+    await deleteComment(c.env, artifact, c.req.param('commentId'), { email: who.me.email, kind: who.me.kind, owner: who.owner })
+    return c.redirect(`/a/${artifact.id}?c=1`)
 })
 
 app.get('/c/:id/:version', async (c) => {
