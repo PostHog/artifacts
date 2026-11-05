@@ -560,6 +560,78 @@ assert.equal((await call('list_comments', { artifact_id: cm.id })).comments.leng
 await call('delete_artifact', { artifact_id: cm.id })
 step('comments: MCP list_comments / update_artifact; off hides, does not delete')
 
+// --- Comments on a passage ---------------------------------------------------------
+const an = await call('publish_artifact', {
+    title: 'Anchored',
+    format: 'html',
+    content: '<!doctype html><html><body><p>Alpha beta gamma.</p><p>Alpha beta delta.</p></body></html>',
+    visibility: 'team',
+})
+const anPost = (jar, fields, headers) => form(jar, `/a/${an.id}/comments`, fields, headers)
+const anFrame = async (jar, path = `/a/${an.id}`) => (await frame(jar, await frameOf(await view(jar, path)))).text()
+
+// The annotator only goes into the content while comments are on.
+assert.ok(!(await anFrame(owner)).includes('__paInstalled'), 'no annotator while comments are off')
+await form(owner, `/a/${an.id}/comments/settings`, { enabled: '1' })
+let content = await anFrame(owner)
+assert.ok(content.includes('__paInstalled'), 'annotator is added once comments are on')
+assert.ok(content.indexOf('__paInstalled') < content.lastIndexOf('</body>'), 'it goes before </body>')
+assert.ok(content.includes(JSON.stringify(BASE)), 'it only posts to the viewer origin')
+assert.ok((await anFrame(other)).includes('__paInstalled'), 'staff viewers get it too')
+res = await frame(owner, (await frameOf(await view(owner, `/a/${an.id}`))).replace(/t=[^&]+/, 't=forged.token'))
+assert.equal(res.status, 403)
+await call('publish_artifact', { artifact_id: an.id, format: 'markdown', content: '# Heading\n\nSome *markdown* text.' })
+content = await anFrame(owner)
+assert.ok(content.includes('__paInstalled') && content.includes('<h1>Heading</h1>'), 'markdown artifacts are annotatable too')
+await call('publish_artifact', { artifact_id: an.id, format: 'html', content: '<p>No closing body tag here', note: 'v3' })
+assert.ok((await anFrame(owner)).includes('__paInstalled'), 'added even without a closing body tag')
+assert.ok(!(await anFrame(owner, `/a/${an.id}?v=1`)).includes('__paInstalled'), 'old versions are not annotatable')
+step('anchored comments: annotator is served only while comments are on, only on the latest version, in every format')
+
+// Anchors are stored and shown as escaped text.
+const anchor = { exact: 'Alpha beta delta.', prefix: 'Alpha beta gamma.', suffix: '' }
+res = await anPost(other, { body: 'This one?', anchor_exact: anchor.exact, anchor_prefix: anchor.prefix, anchor_suffix: anchor.suffix })
+assert.equal(res.status, 302)
+let anPage = await (await view(other, `/a/${an.id}?c=1`)).text()
+assert.match(anPage, /data-exact="Alpha beta delta\."/)
+assert.match(anPage, /data-prefix="Alpha beta gamma\."/)
+assert.match(anPage, /class="quote"[^>]*>“Alpha beta delta\.”/)
+res = await anPost(other, { body: 'Hostile quote', anchor_exact: '"><img src=x onerror=alert(1)>', anchor_prefix: '"><script>x</script>' })
+anPage = await (await view(other, `/a/${an.id}?c=1`)).text()
+assert.ok(!anPage.includes('<img src=x onerror') && !anPage.includes('<script>x</script>'), 'anchor text is escaped in attributes and bodies')
+assert.ok(anPage.includes('data-exact="&quot;&gt;&lt;img src=x onerror=alert(1)&gt;"'), 'and shown as text')
+step('anchored comments: the quote is stored, shown, and escaped')
+
+// Validation: no selection means a normal comment; an oversized one is refused; limits apply to the context.
+res = await anPost(other, { body: 'Whole-document note', anchor_exact: '   ' })
+assert.equal(res.status, 302)
+assert.ok(!res.headers.get('Location').includes('cerr'), 'blank selection is just a normal comment')
+res = await anPost(other, { body: 'Too much quoted', anchor_exact: 'x'.repeat(501) })
+assert.match(res.headers.get('Location'), /cerr=anchor/, 'an oversized selection is refused')
+res = await anPost(other, { body: 'Long context', anchor_exact: 'ok', anchor_prefix: 'p'.repeat(5000), anchor_suffix: 's'.repeat(5000) })
+assert.equal(res.status, 302)
+anPage = await (await view(other, `/a/${an.id}?c=1`)).text()
+assert.ok(!anPage.includes('p'.repeat(65)) && !anPage.includes('s'.repeat(65)), 'context is capped at 64 characters')
+step('anchored comments: validation and caps')
+
+// MCP exposes the quote.
+const anList = await call('list_comments', { artifact_id: an.id })
+assert.equal(anList.comments.find((c) => c.body === 'This one?').on_text, 'Alpha beta delta.')
+assert.equal(anList.comments.find((c) => c.body === 'Whole-document note').on_text, null)
+await call('update_artifact', { artifact_id: an.id, comments_enabled: false })
+assert.ok(!(await anFrame(owner)).includes('__paInstalled'), 'turning comments off takes the annotator out again')
+step('anchored comments: list_comments includes the quoted text; off removes the script')
+
+// Guests get the annotator on invited artifacts; anonymous public viewers never do.
+await call('update_artifact', { artifact_id: an.id, comments_enabled: true })
+await call('set_visibility', { artifact_id: an.id, visibility: 'invited', invited_emails: ['ana@acme.com'] })
+const anaG = await guestLogin('ana@acme.com')
+assert.ok((await anFrame(anaG)).includes('__paInstalled'), 'invited guests can select and comment')
+await call('set_visibility', { artifact_id: an.id, visibility: 'public' })
+assert.ok(!(await anFrame(anon)).includes('__paInstalled'), 'anonymous link viewers never get the annotator')
+await call('delete_artifact', { artifact_id: an.id })
+step('anchored comments: guests get the annotator, anonymous viewers do not')
+
 // --- Security regressions ---------------------------------------------------
 // Open redirect: browsers strip tabs, so /<TAB>/evil.example would become //evil.example
 res = await request(owner, '/login?next=/%09/evil.example')

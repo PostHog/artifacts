@@ -355,3 +355,13 @@ textarea.text { resize: vertical; min-height: 64px; font-size: 12px; }
 .comment-settings { margin-bottom: 12px; }
 .small { font-size: 12px; }
 button.small { font-size: 12px; padding: 2px 6px; }
+
+/* Comments on a passage */
+.comment .quote { all: unset; display: block; box-sizing: border-box; width: 100%; margin-top: 4px; padding: 2px 8px; border-left: 3px solid #eb9d2a; color: var(--text-muted); font-size: 12px; cursor: pointer; overflow-wrap: anywhere; }
+.comment .quote:hover { color: var(--text); background: var(--highlight); }
+.comment .lost-note { display: none; }
+.comment.lost .lost-note { display: block; }
+.comment.flash { outline: 2px solid var(--orange); }
+.composing { border-left: 3px solid #eb9d2a; padding: 2px 8px; font-size: 12px; overflow-wrap: anywhere; }
+.composing[hidden] { display: none; }
+.composing q { color: var(--text); }
