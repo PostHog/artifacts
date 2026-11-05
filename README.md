@@ -20,9 +20,10 @@ Browser ─────────────▶ │ /a/:id          viewer: P
 - **Sharing:**
   - **Private** (the default): only the owner can view. Everyone else gets a 404, so they can't tell the artifact exists.
   - **PostHog team:** anyone signed in with a verified `@posthog.com` account sees the **latest** version. Signed-out visitors are sent to sign in, exactly as for a private artifact, so a leaked team link reveals nothing. Team links get no link-preview tags.
+  - **Specific people** (`invited`): for customers. The owner lists exact emails or whole company domains (`ana@acme.com`, `@acme.com`; consumer domains like `@gmail.com` are refused). A visitor signs in with their own PostHog account, on US or EU Cloud, and is admitted only if the account's **verified** email is on the list. They get a 7-day guest cookie that opens only artifacts whose list still contains them, latest version only. The page before sign-in says nothing about the artifact. Guests are not staff and can't manage anything.
   - **Public with link:** anyone with the link sees the **latest** version.
   - Older versions are only ever visible to the owner.
-  - Unsharing, or publishing a new version, revokes iframe grants that are already open.
+  - Unsharing, removing someone from the list, or publishing a new version revokes iframe grants that are already open.
 - **Versioning:** each publish with an `artifact_id` adds an immutable version. Every version is stored under its own R2 key, so concurrent publishes can't clobber each other. The owner sees a version picker and a banner when viewing an old version.
 - **Untrusted content:** artifacts run in an iframe with `sandbox` (no `allow-same-origin`). The content response also carries a `Content-Security-Policy: sandbox` header, so it keeps an opaque origin even when opened top-level, and can't read cookies or call the app as the viewer. To isolate it further, set `CONTENT_URL` to a separate hostname. That host only serves `/c/*`.
 
@@ -30,10 +31,10 @@ Browser ─────────────▶ │ /a/:id          viewer: P
 
 | Tool | Purpose |
 |---|---|
-| `publish_artifact` | Create an artifact (HTML or Markdown), or add a version with `artifact_id`. Private unless `visibility` is `"team"` or `"public"`. |
+| `publish_artifact` | Create an artifact (HTML or Markdown), or add a version with `artifact_id`. Private unless `visibility` is `"team"`, `"invited"` (with `invited_emails`) or `"public"`. |
 | `list_artifacts` | Your artifacts, newest first. |
 | `get_artifact` | Metadata, version history, and optionally a version's content. |
-| `set_visibility` | `private`, `team` or `public`. |
+| `set_visibility` | `private`, `team`, `invited` (with `invited_emails`, which replaces the list) or `public`. |
 | `update_artifact` | Rename or change the description. |
 | `delete_artifact` | Permanent delete. |
 
