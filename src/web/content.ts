@@ -110,7 +110,7 @@ export function renderMarkdown(markdown: string): string {
 
 const MARKDOWN_CSS = `
 :root { --text:#23251d; --muted:#4d4f46; --border:#d2d3cc; --bg:#fdfdf8; --code:#e5e7e0; --link:#f54e00; color-scheme: light; }
-@media (prefers-color-scheme: dark) { :root { --text:#eeefe9; --muted:#c8cac1; --border:#3b3d34; --bg:#1d1f17; --code:#2a2c24; --link:#f7a501; color-scheme: dark; } }
+@media (prefers-color-scheme: dark) { :root { --text:hsl(0deg 0% 90%); --muted:hsl(0deg 0% 65%); --border:hsl(230deg 8% 20%); --bg:hsl(240deg 8% 8%); --code:hsl(235deg 8% 15%); --link:hsl(43deg 94% 57%); color-scheme: dark; } }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.65 -apple-system, BlinkMacSystemFont, 'avenir next', avenir, 'segoe ui', 'helvetica neue', helvetica, Ubuntu, roboto, noto, arial, sans-serif; -webkit-font-smoothing: antialiased; }
 article { max-width: 760px; margin: 0 auto; padding: 48px 24px 96px; }

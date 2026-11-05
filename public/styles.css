@@ -1,4 +1,5 @@
-/* PostHog Artifacts — mirrors posthog.com's palette, type and "3D" buttons. */
+/* PostHog Artifacts — light mode mirrors posthog.com's palette, type and "3D" buttons; dark mode matches the
+   PostHog app's dark theme ([theme='dark'] in PostHog/posthog frontend/src/styles/base.scss). */
 :root {
     --bg: #eeefe9;
     --bg-accent: #e5e7e0;
@@ -11,6 +12,10 @@
     --orange: #eb9d2a;
     --button-shadow: #cd8407;
     --button-border: #b17816;
+    --secondary-frame: var(--orange);
+    --secondary-face: var(--surface);
+    --secondary-border: var(--button-border);
+    --link: #f54e00;
     --red: #f54e00;
     --blue: #2f80fa;
     --green: #6aa84f;
@@ -21,18 +26,25 @@
 }
 
 @media (prefers-color-scheme: dark) {
+    /* The PostHog app's dark tokens; the app's names are in the comments. */
     :root {
-        --bg: #1d1f17;
-        --bg-accent: #2a2c24;
-        --surface: #23251d;
-        --border: #3b3d34;
-        --border-strong: #4d4f46;
-        --text: #eeefe9;
-        --text-secondary: #c8cac1;
-        --text-muted: #9ea096;
-        --button-shadow: #835c19;
-        --button-border: #835c19;
-        --highlight: rgba(235, 157, 42, 0.15);
+        --bg: hsl(240deg 8% 8%); /* bg-primary: neutral-cool-950 */
+        --bg-accent: hsl(240deg 8% 10%); /* bg-surface-secondary: neutral-cool-900 */
+        --surface: hsl(235deg 8% 15%); /* bg-surface-primary: neutral-cool-850 */
+        --border: hsl(230deg 8% 20%); /* border-primary: neutral-cool-800 */
+        --border-strong: hsl(230deg 8% 40%); /* border-secondary: neutral-cool-600 */
+        --text: hsl(0deg 0% 90%); /* text-primary: neutral-100 */
+        --text-secondary: hsl(0deg 0% 65%); /* text-secondary: neutral-350 */
+        --text-muted: hsl(0deg 0% 60%); /* text-tertiary: neutral-400 */
+        --orange: hsl(43deg 94% 57%); /* accent: the app swaps orange for yellow in dark mode */
+        --button-shadow: #926826; /* primary-3000-frame-bg-dark */
+        --button-border: #b17816; /* primary-3000-button-border-dark */
+        --secondary-frame: #323232; /* secondary-3000-frame-bg-dark */
+        --secondary-face: #1d1f27; /* secondary-3000-button-bg-dark */
+        --secondary-border: #4a4c52; /* secondary-3000-button-border-dark */
+        --link: hsl(43deg 94% 57%); /* accent */
+        --red: oklch(0.704 0.191 22.216deg); /* text-error: red-400 */
+        --highlight: hsl(43deg 94% 57% / 10%); /* accent-highlight-secondary */
         color-scheme: dark;
     }
     .bar .brand img.logo-light { display: none; }
@@ -50,7 +62,7 @@ body {
     -webkit-font-smoothing: antialiased;
 }
 a { color: inherit; }
-a:hover { color: var(--red); }
+a:hover { color: var(--link); }
 code, pre { font-family: var(--mono); font-size: 13px; }
 h1, h2, h3 { letter-spacing: -0.02em; line-height: 1.2; }
 
@@ -84,8 +96,8 @@ h1, h2, h3 { letter-spacing: -0.02em; line-height: 1.2; }
 }
 .btn:hover > span { transform: translateY(-3px); color: #000; }
 .btn:active > span { transform: translateY(-1px); }
-.btn.secondary { background: var(--orange); }
-.btn.secondary > span { background: var(--surface); color: var(--text); }
+.btn.secondary { background: var(--secondary-frame); border-color: var(--secondary-border); }
+.btn.secondary > span { background: var(--secondary-face); border-color: var(--secondary-border); color: var(--text); }
 .btn.secondary:hover > span { color: var(--text); }
 .btn.lg > span { padding: 10px 18px; font-size: 15px; }
 .btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
@@ -168,9 +180,10 @@ h1, h2, h3 { letter-spacing: -0.02em; line-height: 1.2; }
 .pill.team { border-color: #b5cdf5; color: #1d4f9c; background: #edf3fd; }
 .pill.invited { border-color: #e0c27a; color: #7a5200; background: #fdf4dc; }
 @media (prefers-color-scheme: dark) {
-    .pill.public { border-color: #3d6b29; color: #b8d8a6; background: #1f2b19; }
-    .pill.team { border-color: #1d4f9c; color: #b5cdf5; background: #17233a; }
-    .pill.invited { border-color: #7a5200; color: #e0c27a; background: #2e2410; }
+    /* The app's semantic fills: *-950 background, *-900 border, *-400 text. */
+    .pill.public { border-color: oklch(0.393 0.095 152.535deg); color: oklch(0.792 0.209 151.711deg); background: oklch(0.266 0.065 152.934deg); }
+    .pill.team { border-color: oklch(0.379 0.146 265.522deg); color: oklch(0.707 0.165 254.624deg); background: oklch(0.282 0.091 267.935deg); }
+    .pill.invited { border-color: oklch(0.421 0.095 57.708deg); color: oklch(0.852 0.199 91.936deg); background: oklch(0.286 0.066 53.813deg); }
 }
 
 /* --- Popovers (version picker, share) ------------------------------------- */
@@ -218,7 +231,7 @@ details.pop > summary::-webkit-details-marker { display: none; }
 }
 .choice:hover { border-color: var(--border-strong); }
 .choice:has(input:checked) { border-color: var(--orange); background: var(--highlight); }
-.choice input { margin-top: 3px; accent-color: var(--red); }
+.choice input { margin-top: 3px; accent-color: var(--link); }
 .choice strong { display: block; font-size: 13px; }
 .choice small { color: var(--text-muted); font-size: 12px; }
 
