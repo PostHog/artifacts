@@ -185,7 +185,8 @@ function idTokenClaims(idToken: string, login: LoginState): Claims {
     return claims
 }
 
-export type LoginResult = { kind: 'staff'; user: User; next: string } | { kind: 'guest'; email: string; next: string }
+/** A guest's distinctId is set only for staff addresses signed in through US Cloud: their PostHog ID in project 2, for analytics. */
+export type LoginResult = { kind: 'staff'; user: User; next: string } | { kind: 'guest'; email: string; distinctId?: string; next: string }
 
 export async function finishPostHogLogin(env: AppEnv, request: Request): Promise<LoginResult> {
     const params = new URL(request.url).searchParams
@@ -237,7 +238,11 @@ async function completeLogin(env: AppEnv, params: URLSearchParams, login: LoginS
         const email = claims.email ? normalizeEmail(claims.email) : null
         if (!email || claims.email_verified !== true) throw new LoginError('not_verified')
         if (await isRevoked(env, email)) throw new LoginError('revoked')
-        return { kind: 'guest', email, next: login.next }
+        // Staff on an invite list sign in here too. Look up their PostHog ID so their views land on their person in
+        // project 2, which is US Cloud: an EU account's ID would mean nothing there.
+        const isStaffOnUs = isAllowedEmail(env, email) && new URL(login.host).origin === new URL(env.POSTHOG_OAUTH_HOST).origin
+        const distinctId = isStaffOnUs ? await posthogDistinctId(login.host, tokens.access_token) : undefined
+        return { kind: 'guest', email, ...(distinctId ? { distinctId } : {}), next: login.next }
     }
     if (!claims.email || claims.email_verified !== true || !isAllowedEmail(env, claims.email)) {
         console.warn('posthog sign-in rejected', { hasEmail: !!claims.email, emailVerified: claims.email_verified, claims: Object.keys(claims) })
