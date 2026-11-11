@@ -242,8 +242,23 @@ export function viewerPage({ comments, user, guest, invites, artifact, versions,
   ${owner ? (['private', 'team', 'invited', 'public'] as const).map((v) => html`<template data-pill="${v}">${visibilityPill(v)}</template>`) : ''}
   <span class="meta">${owner ? 'Updated' : 'By ' + author + ' ·'} ${relativeTime(isLatest ? artifact.updated_at : version.created_at)}</span>`
 
+    // Links are filled in by viewer.js when the popover opens (POST /a/:id/handover), so they're always fresh.
+    const handover = html`<details class="pop" data-close-outside data-handover="${artifact.id}" data-version="${version.version}">
+    <summary class="btn secondary" title="Open this artifact in Claude Code or Codex"><span>Open in agent</span></summary>
+    <div class="panel right">
+      <h3>Hand “${artifact.title}” to an agent</h3>
+      <p class="hint">Opens a new session with a prompt that downloads ${isLatest ? 'this artifact' : `version ${version.version}`}. Nothing is sent until you press Enter. The download link works for an hour.</p>
+      <a class="agent-option" data-handover-link="claude_code" aria-disabled="true"><strong>Claude Code</strong><small>Opens in a new terminal window.</small></a>
+      <a class="agent-option" data-handover-link="codex" aria-disabled="true"><strong>Codex</strong><small>Opens a new chat in the Codex app.</small></a>
+      <button class="agent-option" type="button" data-handover-copy disabled><strong>Copy prompt</strong><small>Paste it into any agent.</small></button>
+      <p class="hint" data-handover-error hidden>Couldn't prepare the links. Reload the page and try again.</p>
+      <p class="hint">Nothing opens? Claude Code needs v2.1.91 or later, and an interactive session sent at least one prompt on this computer. Codex needs the desktop app.</p>
+    </div>
+  </details>`
+
     const actions = html`<button class="ghost hide-sm" type="button" data-fullscreen title="Full screen">${expandIcon}</button>
   ${comments ? commentsPanel(artifact, comments) : ''}
+  ${handover}
   ${share}`
 
     return layout({

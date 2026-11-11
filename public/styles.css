@@ -220,6 +220,25 @@ details.pop > summary::-webkit-details-marker { display: none; }
 .version .row { display: flex; justify-content: space-between; gap: 8px; }
 .version .note { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
 
+.agent-option {
+    display: block;
+    width: 100%;
+    padding: 8px;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    text-decoration: none;
+    cursor: pointer;
+}
+.agent-option:hover { background: var(--bg-accent); color: inherit; }
+.agent-option[aria-disabled='true'], .agent-option:disabled { opacity: 0.5; pointer-events: none; }
+.agent-option strong { display: block; }
+.agent-option small { display: block; margin-top: 2px; color: var(--text-muted); font-size: 12px; }
+
 .choice {
     display: flex;
     gap: 10px;

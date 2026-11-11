@@ -1,7 +1,7 @@
 import { AuthorizationError, CimdFetchError } from '@cloudflare/workers-oauth-provider'
 import { Hono, type Context } from 'hono'
 import type { AppEnv, User } from '../env'
-import { type Actor, anonymousId, guestAnalyticsId, track } from '../lib/analytics'
+import { type ViewerActor, type ViewerType, actorIdentity, anonymousId, guestAnalyticsId, track } from '../lib/analytics'
 import type { Artifact } from '../store'
 import { deriveSecret } from '../lib/crypto'
 import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/policy'
@@ -9,7 +9,8 @@ import { type Guest, clearGuestCookie, getGuest, getGuestIdentity, guestCookie, 
 import { LoginError, beginPostHogLogin, clientMetadata, finishPostHogLogin, loginErrorMessage } from '../lib/posthog-oauth'
 import { clearSessionCookie, getUser, isAllowedEmail, isLocal, isRevoked, safeNext, serializeCookie, sessionCookie } from '../lib/session'
 import { type Commenter, StoreError, addComment, cleanAnchor, deleteComment, getArtifact, getVersion, isInvited, isOwner, listArtifacts, listComments, listInvites, listVersions, setCommentsEnabled, setVisibility, shareUrl } from '../store'
-import { contentOrigin, frameUrl, serveContent } from './content'
+import { type AgentTarget, type FrameAccess, agentContentUrl, contentOrigin, frameUrl, serveAgentContent, serveContent } from './content'
+import { claudeCodeLink, codexLink, handoverPrompt } from './handover'
 import type { CommentsView } from './templates'
 import { consentPage, guestGatePage, homePage, loginPage, messagePage, viewerPage } from './templates'
 
@@ -25,7 +26,7 @@ app.use('*', async (c, next) => {
     c.header('X-Robots-Tag', 'noindex, nofollow')
     c.header('X-Content-Type-Options', 'nosniff')
     // Artifact content sets its own sandbox CSP, framing rules and referrer policy.
-    if (c.req.path.startsWith('/c/')) return
+    if (c.req.path.startsWith('/c/') || /^\/a\/[^/]+\/agent$/.test(c.req.path)) return
     // Never leak share links to other sites, but keep Origin on our own posts.
     c.header('Referrer-Policy', 'same-origin')
     c.header('X-Frame-Options', 'DENY')
@@ -262,32 +263,65 @@ function guestGate(c: Context<Env>, id: string) {
     return c.html(guestGatePage({ id, error: loginErrorMessage(c.req.query('error')) }))
 }
 
-app.get('/a/:id', async (c) => {
+type ViewAccess =
+    | { ok: true; artifact: Artifact; owner: boolean; access: FrameAccess; guest: string | null; guestIdentity: Guest | null }
+    | { ok: false; deny: 'gate' | 'login' | 'not_found' }
+
+/**
+ * Whether this request may view the artifact, and as whom. The one place viewing is decided: the viewer page
+ * and the agent handover both use it. Non-owners only ever get the latest version.
+ */
+async function viewAccess(c: Context<Env>, id: string): Promise<ViewAccess> {
     const user = c.get('user')
-    const artifact = await getArtifact(c.env, c.req.param('id'))
+    const artifact = await getArtifact(c.env, id)
     // Private artifacts are indistinguishable from missing ones to everyone but the owner:
     // signed-out visitors are asked to sign in either way, signed-in non-owners get a 404 either way.
     // Team artifacts look the same to signed-out visitors, so a leaked team link reveals nothing.
-    if (!artifact) return user ? notFound(c) : loginRedirect(c)
+    if (!artifact) return { ok: false, deny: user ? 'not_found' : 'login' }
     const owner = isOwner(artifact, user)
-    let guest: string | null = null
-    let guestIdentity: Guest | null = null
-
-    if (!owner) {
-        if (artifact.visibility === 'invited') {
-            // Invited viewers (customers) sign in with their own PostHog account; the allowlist decides, not the account.
-            // Staff who aren't the owner go through the same gate; being signed in earns nothing here.
-            guestIdentity = await getGuestIdentity(c.env, c.req.raw)
-            guest = guestIdentity?.email ?? null
-            if (!guest || !(await isInvited(c.env, artifact.id, guest))) return guestGate(c, artifact.id)
-        } else {
-            // Every signed-in user is verified PostHog staff (see isAllowedEmail), so "signed in" is "on the team".
-            if (artifact.visibility === 'team' && !user) return loginRedirect(c)
-            if (artifact.visibility === 'private') return user ? notFound(c) : loginRedirect(c)
-        }
-        // Only the latest version is shared.
-        if (c.req.query('v') && Number(c.req.query('v')) !== artifact.latest_version) return c.redirect(`/a/${artifact.id}`)
+    if (owner) return { ok: true, artifact, owner, access: 'owner', guest: null, guestIdentity: null }
+    if (artifact.visibility === 'invited') {
+        // Invited viewers (customers) sign in with their own PostHog account; the allowlist decides, not the account.
+        // Staff who aren't the owner go through the same gate; being signed in earns nothing here.
+        const guestIdentity = await getGuestIdentity(c.env, c.req.raw)
+        const guest = guestIdentity?.email ?? null
+        if (!guest || !(await isInvited(c.env, artifact.id, guest))) return { ok: false, deny: 'gate' }
+        return { ok: true, artifact, owner, access: 'invited', guest, guestIdentity }
     }
+    // Every signed-in user is verified PostHog staff (see isAllowedEmail), so "signed in" is "on the team".
+    if (artifact.visibility === 'team' && !user) return { ok: false, deny: 'login' }
+    if (artifact.visibility === 'private') return { ok: false, deny: user ? 'not_found' : 'login' }
+    return { ok: true, artifact, owner, access: artifact.visibility, guest: null, guestIdentity: null }
+}
+
+/**
+ * Who a granted view counts as in analytics. Staff let in through an invite list count as staff, under their
+ * PostHog ID. Customers are counted by a hash of their verified email, signed-out viewers of public links by a
+ * long-lived anonymous cookie (set here when `setCookie`), so unique viewers can be counted.
+ */
+async function viewerActor(c: Context<Env>, view: Extract<ViewAccess, { ok: true }>, setCookie: boolean): Promise<ViewerActor> {
+    const user = c.get('user')
+    if (user) return { kind: 'staff', user }
+    const { guestIdentity } = view
+    if (guestIdentity && isAllowedEmail(c.env, guestIdentity.email)) {
+        return { kind: 'staff', user: { email: guestIdentity.email, name: guestIdentity.email, distinctId: guestIdentity.distinctId } }
+    }
+    if (guestIdentity) return { kind: 'guest', id: await guestAnalyticsId(c.env, guestIdentity.email) }
+    const anon = anonymousId(c.env, c.req.raw)
+    if (setCookie) c.header('Set-Cookie', anon.setCookie, { append: true })
+    return { kind: 'anonymous', id: anon.id }
+}
+
+app.get('/a/:id', async (c) => {
+    const user = c.get('user')
+    const view = await viewAccess(c, c.req.param('id'))
+    if (!view.ok) {
+        if (view.deny === 'gate') return guestGate(c, c.req.param('id'))
+        return view.deny === 'login' ? loginRedirect(c) : notFound(c)
+    }
+    const { artifact, owner, guest, access } = view
+    // Only the latest version is shared.
+    if (!owner && c.req.query('v') && Number(c.req.query('v')) !== artifact.latest_version) return c.redirect(`/a/${artifact.id}`)
 
     const requested = owner && c.req.query('v') ? Number(c.req.query('v')) : artifact.latest_version
     const version = Number.isInteger(requested) ? await getVersion(c.env, artifact.id, requested) : null
@@ -309,20 +343,7 @@ app.get('/a/:id', async (c) => {
             : null
 
     c.header('Cache-Control', 'private, no-store')
-    const access = owner ? 'owner' : artifact.visibility === 'team' ? 'team' : artifact.visibility === 'invited' ? 'invited' : 'public'
-    // Only reached once access is granted. Staff let in through an invite list count as staff, under their PostHog
-    // ID. Customers are counted by a hash of their verified email, signed-out viewers of public links by a
-    // long-lived anonymous cookie, so unique viewers can be counted.
-    let actor: Actor
-    if (user) actor = { kind: 'staff', user }
-    else if (guestIdentity && isAllowedEmail(c.env, guestIdentity.email)) {
-        actor = { kind: 'staff', user: { email: guestIdentity.email, name: guestIdentity.email, distinctId: guestIdentity.distinctId } }
-    } else if (guest) actor = { kind: 'guest', id: await guestAnalyticsId(c.env, guest) }
-    else {
-        const anon = anonymousId(c.env, c.req.raw)
-        c.header('Set-Cookie', anon.setCookie, { append: true })
-        actor = { kind: 'anonymous', id: anon.id }
-    }
+    const actor = await viewerActor(c, view, true)
     track(
         c.env,
         c.executionCtx,
@@ -354,6 +375,56 @@ app.get('/a/:id', async (c) => {
             shareUrl: shareUrl(c.env, artifact.id),
         })
     )
+})
+
+// --- Agent handover: open the artifact in Claude Code or Codex -----------------------
+
+// The viewer page asks for this when its "Open in agent" popover opens, so the links are fresh and each one is a
+// plain link the click can follow straight away (browsers only open another app from a click). One grant per
+// target, so analytics can tell which app the agent fetch came from.
+app.post('/a/:id/handover', async (c) => {
+    if (!sameOrigin(c)) return c.text('Forbidden', 403)
+    const view = await viewAccess(c, c.req.param('id'))
+    if (!view.ok) return c.text('Not found', 404)
+    const { artifact, owner, access, guest } = view
+    const body = await c.req.json<{ v?: unknown }>().catch(() => ({}) as { v?: unknown })
+    // Owners may hand over the older version they're looking at; everyone else only ever gets the latest.
+    const requested = owner && Number.isInteger(body.v) ? (body.v as number) : artifact.latest_version
+    const version = await getVersion(c.env, artifact.id, requested)
+    if (!version) return c.text('Not found', 404)
+    const { distinctId, viewerType } = actorIdentity(await viewerActor(c, view, false))
+    const prompt = async (to: AgentTarget) =>
+        handoverPrompt({
+            id: artifact.id,
+            title: artifact.title,
+            format: version.format,
+            version: version.version,
+            shareUrl: shareUrl(c.env, artifact.id),
+            contentUrl: await agentContentUrl(c.env, artifact.id, version.version, access, guest ?? undefined, { to, who: distinctId, viewerType }),
+        })
+    c.header('Cache-Control', 'no-store')
+    return c.json({
+        claude_code: claudeCodeLink(await prompt('claude_code')),
+        codex: codexLink(await prompt('codex')),
+        prompt: await prompt('copy'),
+    })
+})
+
+// What the handover prompt's curl downloads. No session: the signed grant in ?t= is the access.
+app.get('/a/:id/agent', async (c) => {
+    const result = await serveAgentContent(c.env, c.req.raw, c.req.param('id'))
+    if (result.ok) {
+        const { grant } = result
+        track(
+            c.env,
+            c.executionCtx,
+            'artifact sent to agent',
+            { kind: 'resolved', distinctId: grant.who, viewerType: grant.vt as ViewerType },
+            { artifact_id: grant.id, version: grant.v, format: result.format, target: grant.to, access: grant.pub ? 'public' : grant.team ? 'team' : grant.guest ? 'invited' : 'owner' },
+            c.req.raw
+        )
+    }
+    return result.response
 })
 
 // --- Invited viewers: sign in with a PostHog account ------------------------------

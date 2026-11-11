@@ -11,6 +11,7 @@ Claude Code ── MCP ──▶ │ /mcp            OAuth-protected MCP server 
                        │ /oauth/*        token + client registration (workers-oauth-provider)        │
 Browser ─────────────▶ │ /a/:id          viewer: PostHog-branded chrome + sandboxed iframe           │
                        │ /c/:id/:v?t=…   artifact content, CSP-sandboxed, short-lived signed grant   │
+Agent (curl) ────────▶ │ /a/:id/agent?t=…  raw source as text/plain, for the agent handover         │
                        └──────┬──────────────────┬───────────────────┬───────────────────────────────┘
                               D1 (metadata)      R2 (content)        KV (OAuth grants)
 ```
@@ -38,6 +39,21 @@ The owner can turn comments on for an artifact (off by default, so nothing alrea
 - **Limits:** plain text only, 2000 characters, 500 comments per artifact, 10 posts a minute per person. Each comment records which version was latest when it was written.
 - **On a passage:** select text in the artifact and a **Comment** button appears next to the selection. Pressing it opens the panel with the passage quoted above the box. Commented passages are highlighted in the artifact; clicking one jumps to its comment, and clicking a comment's quote scrolls the passage into view (and switches slide, in a deck). Works for HTML, Markdown and slides, on the latest version while comments are on. Passages are stored as the quoted text plus up to 64 characters either side, not a DOM position, so when the author publishes a new version a comment whose text has gone shows "Can't find this text in this version" instead of pointing at the wrong place. Highlighting uses the CSS Custom Highlight API, so a browser without it still gets the button, quotes and comments but no highlight.
 - **Not included:** replies, edits and notifications. Claude can read comments, with the quoted text as `on_text`, using `list_comments`.
+
+### Open in Claude Code or Codex
+
+Anyone who can view an artifact (the owner, staff, invited guests, public viewers) can hand it to a coding agent from the **Open in agent** button in the viewer bar. It offers:
+
+- **Claude Code:** a [`claude-cli://open?q=…`](https://code.claude.com/docs/en/deep-links) link, which opens a new terminal session. Needs Claude Code v2.1.91 or later, and one interactive session that sent a prompt on that computer, which registers the link handler.
+- **Codex:** a [`codex://new?prompt=…`](https://learn.chatgpt.com/docs/reference/commands) link, which opens a new chat in the Codex app.
+- **Copy prompt:** for any other agent.
+
+Each fills in a prompt without sending it. The prompt names the artifact and its share link, and tells the agent to download it with `curl` from `/a/:id/agent?t=…`, then say what it is and ask what to do. Nothing reaches the model until the person presses Enter.
+
+- **The link:** a signed grant (`agent` purpose, valid for an hour) made when the popover opens, so a page left open for hours still hands over a working link. It carries the same grant as the iframe and is re-checked the same way on every fetch: unsharing, removing someone from the list, or publishing a newer version cuts it off. Non-owners only ever get the latest version; owners can hand over the older version they're viewing.
+- **Served as text:** `text/plain` with `nosniff` and a sandbox CSP, so opening the link in a browser shows the source and never runs it.
+- **Titles** are flattened to one plain line in the prompt, and the prompt tells the agent to treat the content as material, not instructions, since both are author-controlled.
+- **No MCP needed:** the agent doesn't need the `posthog-artifacts` MCP server, so the handover works for guests and public viewers too.
 
 ### MCP tools
 
@@ -119,6 +135,7 @@ Server-side events go to [project 2](https://us.posthog.com/project/2) via `post
 | `artifact details updated` | `update_artifact` | `artifact_id`, `is_title_changed`, `is_description_changed` |
 | `artifact deleted` | `delete_artifact` | `artifact_id` |
 | `artifact viewed` | viewer page loads, once access is granted | `artifact_id`, `artifact_owner`, `version`, `access`, `viewer_type` |
+| `artifact sent to agent` | an agent downloads a handover link | `artifact_id`, `version`, `format`, `access`, `target` (`claude_code`, `codex`, `copy`) |
 | `$mcp_tool_call` | every MCP tool call, via [MCP Analytics](https://posthog.com/docs/mcp-analytics/installation/typescript) (`@posthog/mcp`) | `$mcp_tool_name`, `$mcp_is_error`, `$mcp_duration_ms`, `$mcp_intent` |
 | `artifacts mcp client connected` | MCP OAuth completes | `client_id`, `is_consent_remembered` |
 | `artifacts user signed in` | web sign-in | |

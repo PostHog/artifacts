@@ -60,7 +60,7 @@ export async function verify(secret: string, payload: string, signature: string)
  * Every signed token names its purpose, and the purpose is part of what's signed, so a token minted
  * for one use (say, a public iframe grant anyone can obtain) can never be replayed as another (a session).
  */
-export type TokenPurpose = 'session' | 'frame' | 'login' | 'guest'
+export type TokenPurpose = 'session' | 'frame' | 'login' | 'guest' | 'agent'
 
 /** Signs a JSON value with an expiry, producing `<payload>.<signature>`. */
 export async function sealToken(secret: string, purpose: TokenPurpose, value: object, ttlSeconds: number): Promise<string> {

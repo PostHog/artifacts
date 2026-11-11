@@ -10,13 +10,29 @@ export type AnalyticsEvent =
     | 'artifact details updated'
     | 'artifact deleted'
     | 'artifact viewed'
+    | 'artifact sent to agent'
     | 'artifacts mcp client connected'
     | 'artifacts user signed in'
 
 type Properties = Record<string, string | number | boolean | null | undefined>
 
 /** Who triggered an event: a staff member, an invited guest (by guestAnalyticsId), or an anonymous browser (by cookie ID). */
-export type Actor = { kind: 'staff'; user: User } | { kind: 'guest'; id: string } | { kind: 'anonymous'; id: string }
+export type Actor =
+    | { kind: 'staff'; user: User }
+    | { kind: 'guest'; id: string }
+    | { kind: 'anonymous'; id: string }
+    /** An actor resolved earlier and carried in a signed grant, e.g. by the agent handover link. */
+    | { kind: 'resolved'; distinctId: string; viewerType: ViewerType }
+
+export type ViewerType = 'staff' | 'guest' | 'anonymous'
+
+/** The distinct_id and viewer_type an actor is sent as. */
+export type ViewerActor = Exclude<Actor, { kind: 'resolved' }>
+
+export function actorIdentity(actor: ViewerActor): { distinctId: string; viewerType: ViewerType } {
+    if (actor.kind === 'staff') return { distinctId: staffDistinctId(actor.user), viewerType: 'staff' }
+    return { distinctId: actor.id, viewerType: actor.kind }
+}
 
 /**
  * Staff events use the person's own PostHog distinct_id, so they land on their existing person in project 2.
@@ -80,6 +96,7 @@ function actorFields(actor: Actor | User | null): { distinctId: string; properti
     if (a?.kind === 'staff') return { distinctId: staffDistinctId(a.user), properties: { is_signed_in: true, viewer_type: 'staff' } }
     if (a?.kind === 'guest') return { distinctId: a.id, properties: { is_signed_in: true, viewer_type: 'guest' } }
     if (a?.kind === 'anonymous') return { distinctId: a.id, properties: { is_signed_in: false, viewer_type: 'anonymous' } }
+    if (a?.kind === 'resolved') return { distinctId: a.distinctId, properties: { is_signed_in: a.viewerType !== 'anonymous', viewer_type: a.viewerType } }
     return { distinctId: crypto.randomUUID(), properties: { is_signed_in: false, viewer_type: 'anonymous' } }
 }
 
