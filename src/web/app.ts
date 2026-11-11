@@ -5,7 +5,7 @@ import { type Actor, anonymousId, guestAnalyticsId, track } from '../lib/analyti
 import type { Artifact } from '../store'
 import { deriveSecret } from '../lib/crypto'
 import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/policy'
-import { clearGuestCookie, getGuest, guestCookie, normalizeEmail } from '../lib/guest'
+import { type Guest, clearGuestCookie, getGuest, getGuestIdentity, guestCookie, normalizeEmail } from '../lib/guest'
 import { LoginError, beginPostHogLogin, clientMetadata, finishPostHogLogin, loginErrorMessage } from '../lib/posthog-oauth'
 import { clearSessionCookie, getUser, isAllowedEmail, isLocal, isRevoked, safeNext, serializeCookie, sessionCookie } from '../lib/session'
 import { type Commenter, StoreError, addComment, cleanAnchor, deleteComment, getArtifact, getVersion, isInvited, isOwner, listArtifacts, listComments, listInvites, listVersions, setCommentsEnabled, setVisibility, shareUrl } from '../store'
@@ -96,7 +96,7 @@ app.get('/auth/posthog/callback', async (c) => {
         // Staff get a session. Invited viewers get a guest cookie, which only opens artifacts that list them.
         // Only staff sign-ins are tracked: guests are customers, and we don't send their emails to project 2.
         if (result.kind === 'staff') track(c.env, c.executionCtx, 'artifacts user signed in', result.user, { source: 'web' }, c.req.raw)
-        c.header('Set-Cookie', result.kind === 'staff' ? await sessionCookie(c.env, result.user) : await guestCookie(c.env, result.email))
+        c.header('Set-Cookie', result.kind === 'staff' ? await sessionCookie(c.env, result.user) : await guestCookie(c.env, result.email, result.distinctId))
         // The login state is single-use.
         c.header('Set-Cookie', serializeCookie(c.env, 'login', '', 0), { append: true })
         return c.redirect(safeNext(c.env, result.next))
@@ -271,12 +271,14 @@ app.get('/a/:id', async (c) => {
     if (!artifact) return user ? notFound(c) : loginRedirect(c)
     const owner = isOwner(artifact, user)
     let guest: string | null = null
+    let guestIdentity: Guest | null = null
 
     if (!owner) {
         if (artifact.visibility === 'invited') {
             // Invited viewers (customers) sign in with their own PostHog account; the allowlist decides, not the account.
             // Staff who aren't the owner go through the same gate; being signed in earns nothing here.
-            guest = await getGuest(c.env, c.req.raw)
+            guestIdentity = await getGuestIdentity(c.env, c.req.raw)
+            guest = guestIdentity?.email ?? null
             if (!guest || !(await isInvited(c.env, artifact.id, guest))) return guestGate(c, artifact.id)
         } else {
             // Every signed-in user is verified PostHog staff (see isAllowedEmail), so "signed in" is "on the team".
@@ -308,11 +310,14 @@ app.get('/a/:id', async (c) => {
 
     c.header('Cache-Control', 'private, no-store')
     const access = owner ? 'owner' : artifact.visibility === 'team' ? 'team' : artifact.visibility === 'invited' ? 'invited' : 'public'
-    // Only reached once access is granted. Invited viewers are counted by a hash of their verified email, signed-out
-    // viewers of public links by a long-lived anonymous cookie, so unique viewers can be counted.
+    // Only reached once access is granted. Staff let in through an invite list count as staff, under their PostHog
+    // ID. Customers are counted by a hash of their verified email, signed-out viewers of public links by a
+    // long-lived anonymous cookie, so unique viewers can be counted.
     let actor: Actor
     if (user) actor = { kind: 'staff', user }
-    else if (guest) actor = { kind: 'guest', id: await guestAnalyticsId(c.env, guest) }
+    else if (guestIdentity && isAllowedEmail(c.env, guestIdentity.email)) {
+        actor = { kind: 'staff', user: { email: guestIdentity.email, name: guestIdentity.email, distinctId: guestIdentity.distinctId } }
+    } else if (guest) actor = { kind: 'guest', id: await guestAnalyticsId(c.env, guest) }
     else {
         const anon = anonymousId(c.env, c.req.raw)
         c.header('Set-Cookie', anon.setCookie, { append: true })

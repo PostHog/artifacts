@@ -14,15 +14,26 @@ export const normalizeEmail = (value: string): string | null => {
     return email.length <= 254 && /^[^\s@,;<>"']+@[^\s@,;<>"']+\.[^\s@,;<>"']{2,}$/.test(email) ? email : null
 }
 
-export async function getGuest(env: AppEnv, request: Request): Promise<string | null> {
-    const token = await openToken<{ email?: string }>(env.SESSION_SECRET, 'guest', readCookie(request, cookieName(env, 'guest')))
-    const email = typeof token?.email === 'string' ? normalizeEmail(token.email) : null
-    if (!email || (await isRevoked(env, email))) return null
-    return email
+/** A signed-in invited viewer. `distinctId` is their PostHog ID when they're staff (see LoginResult), for analytics only. */
+export interface Guest {
+    email: string
+    distinctId?: string
 }
 
-export async function guestCookie(env: AppEnv, email: string): Promise<string> {
-    return serializeCookie(env, 'guest', await sealToken(env.SESSION_SECRET, 'guest', { email }, GUEST_TTL), GUEST_TTL)
+export async function getGuestIdentity(env: AppEnv, request: Request): Promise<Guest | null> {
+    const token = await openToken<{ email?: string; distinctId?: string }>(env.SESSION_SECRET, 'guest', readCookie(request, cookieName(env, 'guest')))
+    const email = typeof token?.email === 'string' ? normalizeEmail(token.email) : null
+    if (!email || (await isRevoked(env, email))) return null
+    return typeof token?.distinctId === 'string' ? { email, distinctId: token.distinctId } : { email }
+}
+
+export async function getGuest(env: AppEnv, request: Request): Promise<string | null> {
+    return (await getGuestIdentity(env, request))?.email ?? null
+}
+
+export async function guestCookie(env: AppEnv, email: string, distinctId?: string): Promise<string> {
+    const value = distinctId ? { email, distinctId } : { email }
+    return serializeCookie(env, 'guest', await sealToken(env.SESSION_SECRET, 'guest', value, GUEST_TTL), GUEST_TTL)
 }
 
 export const clearGuestCookie = (env: AppEnv) => serializeCookie(env, 'guest', '', 0)
