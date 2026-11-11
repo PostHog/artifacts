@@ -32,7 +32,16 @@ export async function getUser(env: AppEnv, request: Request): Promise<User | nul
     const session = await openToken<Partial<User>>(env.SESSION_SECRET, 'session', readCookie(request, cookieName(env, 'session')))
     if (!session || typeof session.email !== 'string' || !isAllowedEmail(env, session.email)) return null
     if (await isRevoked(env, session.email)) return null
-    return { email: session.email, name: typeof session.name === 'string' ? session.name : session.email }
+    return toUser({ ...session, email: session.email })
+}
+
+/** A User from a sealed session or MCP grant props, keeping only fields of the right type. */
+export function toUser(props: Partial<User> & { email: string }): User {
+    return {
+        email: props.email,
+        name: typeof props.name === 'string' ? props.name : props.email,
+        ...(typeof props.distinctId === 'string' ? { distinctId: props.distinctId } : {}),
+    }
 }
 
 /**

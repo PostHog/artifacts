@@ -245,5 +245,22 @@ async function completeLogin(env: AppEnv, params: URLSearchParams, login: LoginS
     }
     const email = claims.email.toLowerCase()
     if (await isRevoked(env, email)) throw new LoginError('revoked')
-    return { kind: 'staff', user: { email, name: name || email }, next: login.next }
+    const distinctId = await posthogDistinctId(login.host, tokens.access_token)
+    return { kind: 'staff', user: { email, name: name || email, ...(distinctId ? { distinctId } : {}) }, next: login.next }
+}
+
+/** The user's own distinct_id in PostHog, for analytics only. Best effort: sign-in never fails over it. */
+async function posthogDistinctId(host: string, accessToken: string): Promise<string | undefined> {
+    try {
+        const response = await fetch(`${host}/api/users/@me/`, { headers: { Authorization: `Bearer ${accessToken}` } })
+        if (!response.ok) {
+            console.warn('posthog user lookup failed', response.status)
+            return undefined
+        }
+        const { distinct_id } = await response.json<{ distinct_id?: unknown }>()
+        return typeof distinct_id === 'string' && distinct_id.length > 0 && distinct_id.length <= 200 ? distinct_id : undefined
+    } catch (error) {
+        console.warn('posthog user lookup failed', String(error))
+        return undefined
+    }
 }

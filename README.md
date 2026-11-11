@@ -118,9 +118,11 @@ Server-side events go to [project 2](https://us.posthog.com/project/2) via `post
 | `artifact visibility changed` | `set_visibility` or the Share button | `artifact_id`, `visibility`, `source` |
 | `artifact details updated` | `update_artifact` | `artifact_id`, `is_title_changed`, `is_description_changed` |
 | `artifact deleted` | `delete_artifact` | `artifact_id` |
-| `artifact viewed` | viewer page loads | `artifact_id`, `artifact_owner`, `version`, `access` |
-| `artifacts mcp tool called` | every MCP tool call | `tool`, `is_successful`, `error_code` |
+| `artifact viewed` | viewer page loads, once access is granted | `artifact_id`, `artifact_owner`, `version`, `access`, `viewer_type` |
+| `$mcp_tool_call` | every MCP tool call, via [MCP Analytics](https://posthog.com/docs/mcp-analytics/installation/typescript) (`@posthog/mcp`) | `$mcp_tool_name`, `$mcp_is_error`, `$mcp_duration_ms`, `$mcp_intent` |
 | `artifacts mcp client connected` | MCP OAuth completes | `client_id`, `is_consent_remembered` |
 | `artifacts user signed in` | web sign-in | |
 
-Every event has `app = posthog-artifacts` and `is_signed_in`. Users are keyed by email with no person profiles (staff already have them in project 2). Content, titles, descriptions, notes and IPs are never sent. When querying, leave "Filter out internal and test users" off: it drops `@posthog.com` users.
+Every event has `app = posthog-artifacts`, and every product event has `is_signed_in` and `viewer_type` (`staff`, `guest` or `anonymous`). Staff are keyed by their own PostHog `distinct_id` (looked up from `/api/users/@me/` at sign-in), so events attach to their existing person in project 2; sessions and MCP connections from before that lookup fall back to the email. Events never create or update persons. Invited guests are customers, so their emails are never sent: they're keyed by a keyed hash of their verified email (`guest_…`). Signed-out viewers of public links are keyed by a random ID in a one-year `aid` cookie, so unique viewers can be counted. Events from browser and MCP requests carry the visitor's IP from `CF-Connecting-IP` as `$ip`, so PostHog resolves their location, not the Worker's. Content, titles, descriptions and notes are never sent: MCP Analytics events drop `$mcp_parameters`, `$mcp_response` and `$mcp_error_message` before sending.
+
+MCP tools have an extra `context` argument that agents fill with why they called the tool. It becomes `$mcp_intent` and is stripped before the tool runs. The server is stateless, so `$session_id` is a hash of the client's access token. When querying, leave "Filter out internal and test users" off: it drops `@posthog.com` users.
