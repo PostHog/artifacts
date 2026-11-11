@@ -29,6 +29,11 @@ export interface AppEnv {
 export interface User {
     email: string
     name: string
+    /**
+     * The person's distinct_id in PostHog itself (from /api/users/@me/), so analytics land on their existing
+     * person in project 2. Missing for dev logins, failed lookups, and sessions or MCP grants made before it existed.
+     */
+    distinctId?: string
 }
 
 /**

@@ -1,9 +1,11 @@
 import { McpServer } from '@modelcontextprotocol/server'
+import { instrument } from '@posthog/mcp'
+import type { PostHog } from 'posthog-node'
 import { createMcpHandler } from 'agents/mcp/server'
 import { z } from 'zod'
 import type { AppEnv, User } from './env'
-import { track } from './lib/analytics'
-import { isAllowedEmail, isRevoked } from './lib/session'
+import { APP, analyticsClient, clientIp, staffDistinctId, track } from './lib/analytics'
+import { isAllowedEmail, isRevoked, toUser } from './lib/session'
 import {
     type Artifact,
     MAX_CONTENT_BYTES,
@@ -78,20 +80,48 @@ function fail(error: unknown) {
     return { content: [{ type: 'text' as const, text: message }], isError: true }
 }
 
-export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext, 'waitUntil'>): McpServer {
-    const server = new McpServer({ name: 'posthog-artifacts', version: '1.0.0' }, { instructions: INSTRUCTIONS })
+const SERVER_VERSION = '1.0.0'
 
-    /** Wraps a tool body so store errors become MCP tool errors instead of protocol failures, and tracks the call. */
+/** Per-request analytics for MCP Analytics (`$mcp_tool_call`). Null when analytics are off. */
+export interface McpTelemetry {
+    posthog: PostHog
+    /** `ses_…`, stable for one client's grant, never shared between clients. */
+    sessionId: string
+    ip?: string
+}
+
+export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext, 'waitUntil'>, telemetry: McpTelemetry | null = null): McpServer {
+    const server = new McpServer({ name: APP, version: SERVER_VERSION }, { instructions: INSTRUCTIONS })
+    if (telemetry) {
+        // Captures $mcp_tool_call for every tool, and adds a `context` argument that agents fill with why they
+        // called it (stripped before our handlers run). Docs: https://posthog.com/docs/mcp-analytics/installation/typescript
+        instrument(server, telemetry.posthog, {
+            identify: { distinctId: staffDistinctId(user) },
+            sessionId: () => telemetry.sessionId,
+            // Tool errors are expected outcomes (not found, rate limited), not exceptions for Error Tracking.
+            enableExceptionAutocapture: false,
+            eventProperties: () => ({ app: APP }),
+            // Staff already have profiles in project 2, so never create or update persons from here. Drop the raw
+            // request, response and error text: they carry artifact content, private links, invite lists, comments,
+            // and customer addresses echoed back in validation errors. $mcp_input_keys still records which
+            // arguments were passed, and $mcp_is_error which calls failed.
+            beforeSend: (event) => {
+                const { $set, $set_once, $mcp_parameters, $mcp_response, $mcp_error_message, ...properties } = event.properties as Record<string, unknown>
+                return {
+                    ...event,
+                    properties: { ...properties, $process_person_profile: false, ...(telemetry.ip ? { $ip: telemetry.ip } : {}) },
+                } as typeof event
+            },
+        })
+    }
+
+    /** Wraps a tool body so store errors become MCP tool errors instead of protocol failures. MCP Analytics records the call. */
     const guarded =
-        <A>(tool: string, fn: (args: A) => Promise<object>) =>
+        <A>(fn: (args: A) => Promise<object>) =>
         async (args: A) => {
             try {
-                const result = ok(await fn(args))
-                track(env, ctx, 'artifacts mcp tool called', user, { tool, is_successful: true })
-                return result
+                return ok(await fn(args))
             } catch (error) {
-                const error_code = error instanceof StoreError ? error.code : 'internal'
-                track(env, ctx, 'artifacts mcp tool called', user, { tool, is_successful: false, error_code })
                 return fail(error)
             }
         }
@@ -117,7 +147,7 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
             }),
             annotations: { destructiveHint: false, idempotentHint: false },
         },
-        guarded('publish_artifact', async (args) => {
+        guarded(async (args) => {
             const { success } = await env.PUBLISH_LIMITER.limit({ key: user.email })
             if (!success) throw new StoreError('invalid', 'Too many publishes in the last minute; wait a moment and retry')
             const { artifact, version } = await publish(env, user, {
@@ -155,7 +185,7 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
             }),
             annotations: { readOnlyHint: true },
         },
-        guarded('list_artifacts', async ({ limit, updated_before }) => {
+        guarded(async ({ limit, updated_before }) => {
             const artifacts = await listArtifacts(env, user, {
                 limit,
                 before: updated_before ? Date.parse(updated_before) : undefined,
@@ -176,7 +206,7 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
             }),
             annotations: { readOnlyHint: true },
         },
-        guarded('get_artifact', async ({ artifact_id, version, include_content }) => {
+        guarded(async ({ artifact_id, version, include_content }) => {
             const artifact = await getOwnedArtifact(env, artifact_id, user)
             const versions = await listVersions(env, artifact.id)
             let content: string | undefined
@@ -198,7 +228,7 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
             inputSchema: z.object({ artifact_id: artifactId, visibility, invited_emails: invitedEmails.optional() }),
             annotations: { idempotentHint: true },
         },
-        guarded('set_visibility', async ({ artifact_id, visibility, invited_emails }) => {
+        guarded(async ({ artifact_id, visibility, invited_emails }) => {
             const artifact = await setVisibility(env, user, artifact_id, visibility, invited_emails)
             track(env, ctx, 'artifact visibility changed', user, { artifact_id, visibility, source: 'mcp' })
             return describeWithInvites(env, artifact)
@@ -219,7 +249,7 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
             }),
             annotations: { idempotentHint: true },
         },
-        guarded('update_artifact', async ({ artifact_id, title, description, comments_enabled }) => {
+        guarded(async ({ artifact_id, title, description, comments_enabled }) => {
             let artifact = await updateMetadata(env, user, artifact_id, { title, description })
             if (comments_enabled !== undefined) artifact = await setCommentsEnabled(env, user, artifact_id, comments_enabled)
             track(env, ctx, 'artifact details updated', user, {
@@ -242,7 +272,7 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
             inputSchema: z.object({ artifact_id: artifactId }),
             annotations: { readOnlyHint: true },
         },
-        guarded('list_comments', async ({ artifact_id }) => {
+        guarded(async ({ artifact_id }) => {
             const artifact = await getOwnedArtifact(env, artifact_id, user)
             const comments = await listComments(env, artifact.id)
             return {
@@ -270,7 +300,7 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
             inputSchema: z.object({ artifact_id: artifactId }),
             annotations: { destructiveHint: true },
         },
-        guarded('delete_artifact', async ({ artifact_id }) => {
+        guarded(async ({ artifact_id }) => {
             await deleteArtifact(env, user, artifact_id)
             track(env, ctx, 'artifact deleted', user, { artifact_id, source: 'mcp' })
             return { deleted: artifact_id }
@@ -289,25 +319,76 @@ export const mcpApiHandler = {
         if (typeof props.email !== 'string' || !isAllowedEmail(env, props.email) || (await isRevoked(env, props.email))) {
             return Response.json({ error: 'access_revoked' }, { status: 403 })
         }
-        const user: User = { email: props.email, name: typeof props.name === 'string' ? props.name : props.email }
-        const handler = createMcpHandler(() => buildServer(env, user, ctx), { route: '/mcp', maxRequestBodySize: MAX_REQUEST_BYTES })
-
-        // agents' protocol-era check and legacy (2025-era) handler both read the body with the SDK's 4 MB
-        // default, ignoring maxRequestBodySize, which breaks publishing anything near MAX_CONTENT_BYTES.
-        // Read and bound the body ourselves and hand it over parsed, so nothing downstream re-reads it.
-        if (request.method !== 'POST') return handler.fetch(request)
-        if (Number(request.headers.get('Content-Length') ?? 0) > MAX_REQUEST_BYTES) return tooLarge()
-        const text = await request.text()
-        if (new TextEncoder().encode(text).byteLength > MAX_REQUEST_BYTES) return tooLarge()
-        let parsedBody: unknown
-        try {
-            parsedBody = JSON.parse(text)
-        } catch {
-            parsedBody = undefined
-        }
-        const replay = new Request(request, { body: text })
-        return handler.fetch(replay, parsedBody === undefined ? undefined : { parsedBody })
+        const user: User = toUser({ ...props, email: props.email })
+        const telemetry = await mcpTelemetry(env, request)
+        const handler = createMcpHandler(() => buildServer(env, user, ctx, telemetry), { route: '/mcp', maxRequestBodySize: MAX_REQUEST_BYTES })
+        const response = await handleMcp(request, handler)
+        return telemetry ? flushWhenSent(response, telemetry.posthog, ctx) : response
     },
+}
+
+async function handleMcp(request: Request, handler: ReturnType<typeof createMcpHandler>): Promise<Response> {
+    // agents' protocol-era check and legacy (2025-era) handler both read the body with the SDK's 4 MB
+    // default, ignoring maxRequestBodySize, which breaks publishing anything near MAX_CONTENT_BYTES.
+    // Read and bound the body ourselves and hand it over parsed, so nothing downstream re-reads it.
+    if (request.method !== 'POST') return handler.fetch(request)
+    if (Number(request.headers.get('Content-Length') ?? 0) > MAX_REQUEST_BYTES) return tooLarge()
+    const text = await request.text()
+    if (new TextEncoder().encode(text).byteLength > MAX_REQUEST_BYTES) return tooLarge()
+    let parsedBody: unknown
+    try {
+        parsedBody = JSON.parse(text)
+    } catch {
+        parsedBody = undefined
+    }
+    const replay = new Request(request, { body: text })
+    return handler.fetch(replay, parsedBody === undefined ? undefined : { parsedBody })
+}
+
+/**
+ * The server is stateless (a fresh one per request, no Mcp-Session-Id), so group a client's calls by its access
+ * token instead: one token belongs to one client's grant. Hashed, so the token itself never leaves the Worker.
+ */
+async function mcpTelemetry(env: AppEnv, request: Request): Promise<McpTelemetry | null> {
+    const ip = clientIp(request)
+    const posthog = analyticsClient(env, { geoip: !!ip })
+    if (!posthog) return null
+    const token = request.headers.get('Authorization') ?? ''
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`mcp-session:${token}`)))
+    const sessionId = `ses_${Array.from(digest.slice(0, 16), (b) => b.toString(16).padStart(2, '0')).join('')}`
+    return { posthog, sessionId, ip }
+}
+
+/**
+ * MCP Analytics captures after a tool returns, and a streamed (SSE) response is returned before the tool even
+ * runs. So flush once the whole body has been sent, kept alive with waitUntil so the client isn't kept waiting.
+ */
+function flushWhenSent(response: Response, posthog: PostHog, ctx: Pick<ExecutionContext, 'waitUntil'>): Response {
+    const flush = () => posthog.shutdown().catch((error) => console.warn('posthog flush failed', String(error)))
+    if (!response.body) {
+        ctx.waitUntil(flush())
+        return response
+    }
+    let done!: () => void
+    ctx.waitUntil(new Promise<void>((resolve) => (done = resolve)).then(flush))
+    const reader = response.body.getReader()
+    const tracked = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+            try {
+                const { done: finished, value } = await reader.read()
+                if (!finished) return controller.enqueue(value)
+                controller.close()
+            } catch (error) {
+                controller.error(error)
+            }
+            done()
+        },
+        cancel(reason) {
+            done()
+            return reader.cancel(reason)
+        },
+    })
+    return new Response(tracked, response)
 }
 
 // Room for a MAX_CONTENT_BYTES artifact after JSON string escaping (worst case ~2x) plus the envelope.
