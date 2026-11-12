@@ -750,8 +750,17 @@ step('handover: invited guests, re-checked against the list')
 
 // Revocation cuts off web sessions and MCP tokens immediately
 const kv = (...args) => execFileSync('pnpm', ['exec', 'wrangler', 'kv', 'key', ...args, '--binding', 'OAUTH_KV', '--local'], { stdio: 'ignore' })
+// Links the owner already holds (their iframe, and a handover link that may have been pasted somewhere) die too.
+const rv = await call('publish_artifact', { title: 'Revoke me', format: 'markdown', content: '# Owner only' })
+const rvFrame = await frameOf(await view(owner, `/a/${rv.id}`))
+const rvAgent = agentUrlOf((await (await handover(owner, rv.id)).json()).prompt)
+assert.equal((await request(null, rvAgent)).status, 200)
 kv('put', 'revoked:smoke@posthog.com', '1')
 try {
+    res = await frame(anon, rvFrame)
+    assert.equal(res.status, 404, "a revoked owner's iframe link stops working")
+    res = await request(null, rvAgent)
+    assert.equal(res.status, 404, "a revoked owner's handover link stops working")
     res = await request(owner, '/')
     assert.match(await res.text(), /Sign in with PostHog/, 'revoked session is signed out')
     res = await request(null, '/mcp', {
@@ -765,6 +774,8 @@ try {
 }
 res = await request(owner, '/')
 assert.match(await res.text(), /Your artifacts/, 'access restored after un-revoking')
-step('revocation kill switch (web + MCP)')
+assert.equal((await request(null, rvAgent)).status, 200, 'handover link works again after un-revoking')
+await call('delete_artifact', { artifact_id: rv.id })
+step("revocation kill switch (web + MCP + the owner's content links)")
 
 console.log('\nAll smoke checks passed.')

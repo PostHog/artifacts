@@ -116,7 +116,7 @@ Nothing needs to be created by hand.
 
 Rotating `SESSION_SECRET` signs everyone out and invalidates open iframe grants. MCP tokens are unaffected.
 
-**Revoking someone** (offboarding, incidents) takes effect immediately for both the web and MCP:
+**Revoking someone** (offboarding, incidents) takes effect immediately for the web, MCP, and the iframe and agent handover links of artifacts they own:
 
 ```sh
 pnpm wrangler kv key put --binding OAUTH_KV --remote revoked:someone@posthog.com 1
