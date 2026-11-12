@@ -45,14 +45,16 @@ export const contentOrigin = (env: AppEnv) => new URL(env.CONTENT_URL || env.PUB
  * a separate content origin where the session cookie is never sent.
  */
 /**
- * Re-checks a non-owner grant against the artifact as it is now, so unsharing, removing someone from the list,
- * or publishing a newer version cuts them off on the next load. No session reaches the routes that use grants,
- * so the grant carries what was decided: owner grants carry nothing and need no re-check.
+ * Re-checks a grant against the artifact as it is now. No session reaches the routes that use grants, so the
+ * grant carries what was decided. Non-owners lose access on the next load when the artifact is unshared, they're
+ * removed from the list, or a newer version is published. An owner grant carries nothing but is cut off when the
+ * owner is revoked (the kill switch in session.ts), so links they handed over stop working straight away.
  */
 async function stillShared(env: AppEnv, grant: AccessGrant): Promise<boolean> {
-    if (!grant.pub && !grant.team && !grant.guest) return true
     const artifact = await getArtifact(env, grant.id)
-    if (!artifact || artifact.latest_version !== grant.v) return false
+    if (!artifact) return false
+    if (!grant.pub && !grant.team && !grant.guest) return !(await isRevoked(env, artifact.owner_email))
+    if (artifact.latest_version !== grant.v) return false
     // A team grant went to signed-in staff, who can still view if the artifact has since gone public.
     if (grant.pub) return artifact.visibility === 'public'
     if (grant.team) return artifact.visibility === 'team' || artifact.visibility === 'public'
