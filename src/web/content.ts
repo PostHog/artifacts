@@ -17,7 +17,8 @@ const FRAME_TOKEN_TTL = 60 * 10
  */
 export const SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-downloads'
 
-interface FrameGrant {
+/** What the viewer page decided: which version, and on what grounds. Shared by iframe and agent grants. */
+interface AccessGrant {
     id: string
     v: number
     /** Issued to a non-owner via the public link: re-checked on every load so unsharing takes effect immediately. */
@@ -26,6 +27,9 @@ interface FrameGrant {
     team?: boolean
     /** Issued to an invited viewer (their email): re-checked against the allowlist on every load. */
     guest?: string
+}
+
+interface FrameGrant extends AccessGrant {
     /** The viewer can see comments on this (latest) version: add the annotator script to the content. */
     ann?: boolean
 }
@@ -40,15 +44,33 @@ export const contentOrigin = (env: AppEnv) => new URL(env.CONTENT_URL || env.PUB
  * a short-lived signed URL. The content route then needs no session, which keeps it working on
  * a separate content origin where the session cookie is never sent.
  */
-export async function frameUrl(env: AppEnv, id: string, version: number, access: FrameAccess, guestEmail?: string, annotate = false): Promise<string> {
-    const grant: FrameGrant = {
+/**
+ * Re-checks a non-owner grant against the artifact as it is now, so unsharing, removing someone from the list,
+ * or publishing a newer version cuts them off on the next load. No session reaches the routes that use grants,
+ * so the grant carries what was decided: owner grants carry nothing and need no re-check.
+ */
+async function stillShared(env: AppEnv, grant: AccessGrant): Promise<boolean> {
+    if (!grant.pub && !grant.team && !grant.guest) return true
+    const artifact = await getArtifact(env, grant.id)
+    if (!artifact || artifact.latest_version !== grant.v) return false
+    // A team grant went to signed-in staff, who can still view if the artifact has since gone public.
+    if (grant.pub) return artifact.visibility === 'public'
+    if (grant.team) return artifact.visibility === 'team' || artifact.visibility === 'public'
+    return artifact.visibility === 'invited' && (await isInvited(env, grant.id, grant.guest!)) && !(await isRevoked(env, grant.guest!))
+}
+
+function accessGrant(id: string, version: number, access: FrameAccess, guestEmail?: string): AccessGrant {
+    return {
         id,
         v: version,
         ...(access === 'public' && { pub: true }),
         ...(access === 'team' && { team: true }),
         ...(access === 'invited' && guestEmail && { guest: guestEmail }),
-        ...(annotate && { ann: true }),
     }
+}
+
+export async function frameUrl(env: AppEnv, id: string, version: number, access: FrameAccess, guestEmail?: string, annotate = false): Promise<string> {
+    const grant: FrameGrant = { ...accessGrant(id, version, access, guestEmail), ...(annotate && { ann: true }) }
     const token = await sealToken(env.SESSION_SECRET, 'frame', grant, FRAME_TOKEN_TTL)
     return `${contentOrigin(env)}/c/${id}/${version}?t=${encodeURIComponent(token)}`
 }
@@ -79,22 +101,7 @@ export async function serveContent(env: AppEnv, request: Request, id: string, ve
     }
     const grant = await openToken<FrameGrant>(env.SESSION_SECRET, 'frame', url.searchParams.get('t'))
     if (!grant || grant.id !== id || grant.v !== version) return refuse(403, 'This link has expired. Reload the artifact page.')
-    if (grant.pub || grant.team) {
-        // A team grant went to signed-in staff, who can still view if the artifact has since gone public.
-        const allowed = grant.pub ? ['public'] : ['team', 'public']
-        const artifact = await getArtifact(env, id)
-        if (!artifact || !allowed.includes(artifact.visibility) || artifact.latest_version !== version) {
-            return refuse(404, 'This artifact is no longer shared.')
-        }
-    }
-    if (grant.guest) {
-        // No session reaches this route, so the grant carries the address. Re-check the allowlist, so removing
-        // someone, unsharing, or publishing a new version cuts them off within a page load.
-        const artifact = await getArtifact(env, id)
-        if (!artifact || artifact.visibility !== 'invited' || artifact.latest_version !== version || !(await isInvited(env, id, grant.guest)) || (await isRevoked(env, grant.guest))) {
-            return refuse(404, 'This artifact is no longer shared.')
-        }
-    }
+    if (!(await stillShared(env, grant))) return refuse(404, 'This artifact is no longer shared.')
     const meta = await getVersion(env, id, version)
     const content = meta && (await getContent(env, meta))
     if (!meta || content == null) return refuse(404, 'Not found')
@@ -106,6 +113,66 @@ export async function serveContent(env: AppEnv, request: Request, id: string, ve
         annotate = !!artifact?.comments_enabled && artifact.latest_version === version
     }
     return new Response(annotate ? injectAnnotator(rendered, new URL(env.PUBLIC_URL).origin) : rendered, { headers: contentHeaders(env) })
+}
+
+// --- Agent handover ----------------------------------------------------------------
+
+// Long enough to click, read the prompt and press Enter in Claude Code or Codex, short enough that a prompt
+// pasted somewhere it shouldn't be stops working soon.
+export const AGENT_TOKEN_TTL = 60 * 60
+
+export type AgentTarget = 'claude_code' | 'codex' | 'copy'
+
+interface AgentGrant extends AccessGrant {
+    /** Where the prompt was handed to, and who handed it over (analytics distinct_id and viewer_type). */
+    to: AgentTarget
+    who: string
+    vt: string
+}
+
+/**
+ * A short-lived URL an agent can download one version from with curl, minted for someone the viewer page has
+ * just let in. It carries the same grant as the iframe, and is re-checked the same way on every fetch.
+ */
+export async function agentContentUrl(
+    env: AppEnv,
+    id: string,
+    version: number,
+    access: FrameAccess,
+    guestEmail: string | undefined,
+    handover: { to: AgentTarget; who: string; viewerType: string }
+): Promise<string> {
+    const grant: AgentGrant = { ...accessGrant(id, version, access, guestEmail), to: handover.to, who: handover.who, vt: handover.viewerType }
+    const token = await sealToken(env.SESSION_SECRET, 'agent', grant, AGENT_TOKEN_TTL)
+    return `${new URL(env.PUBLIC_URL).origin}/a/${id}/agent?t=${encodeURIComponent(token)}`
+}
+
+export type AgentFetch = { ok: true; response: Response; grant: AgentGrant; format: string } | { ok: false; response: Response }
+
+/**
+ * Serves the raw source (Markdown or HTML) as plain text. It's for agents, not browsers: text/plain with
+ * nosniff and a sandbox CSP means opening the link in a browser shows the source, never runs it.
+ */
+export async function serveAgentContent(env: AppEnv, request: Request, id: string): Promise<AgentFetch> {
+    const grant = await openToken<AgentGrant>(env.SESSION_SECRET, 'agent', new URL(request.url).searchParams.get('t'))
+    if (!grant || grant.id !== id) return { ok: false, response: refuse(403, 'This link has expired. Open the artifact page and hand it over again.') }
+    if (!(await stillShared(env, grant))) return { ok: false, response: refuse(404, 'This artifact is no longer shared.') }
+    const meta = await getVersion(env, id, grant.v)
+    const content = meta && (await getContent(env, meta))
+    if (!meta || content == null) return { ok: false, response: refuse(404, 'Not found') }
+    const filename = `${id}-v${meta.version}.${meta.format === 'markdown' ? 'md' : 'html'}`
+    const response = new Response(content, {
+        headers: {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Content-Disposition': `inline; filename="${filename}"`,
+            'Content-Security-Policy': "sandbox; default-src 'none'",
+            'Cache-Control': 'private, no-store',
+            'Referrer-Policy': 'no-referrer',
+            'X-Robots-Tag': 'noindex, nofollow',
+            'X-Content-Type-Options': 'nosniff',
+        },
+    })
+    return { ok: true, response, grant, format: meta.format }
 }
 
 const marked = new Marked({ gfm: true })

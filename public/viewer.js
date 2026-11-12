@@ -164,6 +164,49 @@
         })
     }
 
+    // Agent handover: fetch fresh links each time the popover opens, so a page left open for hours still works.
+    // The links are plain <a href>s, so the click itself opens the app (browsers require a click for that).
+    const handover = document.querySelector('[data-handover]')
+    if (handover) {
+        const links = [...handover.querySelectorAll('[data-handover-link]')]
+        const copyPrompt = handover.querySelector('[data-handover-copy]')
+        const error = handover.querySelector('[data-handover-error]')
+        let prompt = ''
+        const setReady = (ready) => {
+            for (const a of links) a.setAttribute('aria-disabled', ready ? 'false' : 'true')
+            copyPrompt.disabled = !ready
+        }
+        handover.addEventListener('toggle', async () => {
+            if (!handover.open) return
+            setReady(false)
+            error.hidden = true
+            try {
+                const response = await fetch(`/a/${handover.dataset.handover}/handover`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ v: Number(handover.dataset.version) }),
+                })
+                if (!response.ok) throw new Error(String(response.status))
+                const data = await response.json()
+                for (const a of links) a.href = data[a.dataset.handoverLink]
+                prompt = data.prompt
+                setReady(true)
+            } catch {
+                error.hidden = false
+            }
+        })
+        for (const a of links) a.addEventListener('click', () => setTimeout(() => (handover.open = false), 0))
+        copyPrompt.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(prompt)
+                notify('Prompt copied')
+            } catch {
+                notify("Couldn't copy the prompt")
+            }
+            handover.open = false
+        })
+    }
+
     document.querySelector('[data-fullscreen]')?.addEventListener('click', () => {
         document.querySelector('.viewer iframe')?.requestFullscreen?.().catch(() => {})
     })
