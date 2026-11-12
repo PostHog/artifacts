@@ -748,6 +748,40 @@ assert.match(await res.text(), /data-handover="/, 'guests see the Open in agent 
 await call('delete_artifact', { artifact_id: ho.id })
 step('handover: invited guests, re-checked against the list')
 
+// --- View counter (owner only) ---------------------------------------------------------
+// Views are recorded after the response (waitUntil), so give them a moment to land.
+const settle = () => new Promise((resolve) => setTimeout(resolve, 300))
+const viewsSummary = async () => (await (await view(owner, `/a/${vc.id}`)).text()).match(/<span class="views-count">([^<]+)<\/span>/)?.[1]
+const vc = await call('publish_artifact', { title: 'Counted', format: 'markdown', content: '# Count me', visibility: 'public' })
+await settle()
+assert.equal(await viewsSummary(), '0 viewers · 0 views', 'owner views are not counted')
+await view(other, `/a/${vc.id}`)
+await view(other, `/a/${vc.id}`)
+const browserA = new Jar()
+await view(browserA, `/a/${vc.id}`)
+await view(browserA, `/a/${vc.id}`)
+await view(new Jar(), `/a/${vc.id}`)
+await settle()
+assert.equal(await viewsSummary(), '3 viewers · 5 views', 'unique viewers (anonymous by cookie) and total views')
+await call('publish_artifact', { artifact_id: vc.id, format: 'markdown', content: '# v2' })
+res = await view(owner, `/a/${vc.id}`)
+let vcPage = await res.text()
+assert.match(vcPage, /title="other@posthog\.com"/, 'owner sees staff viewers by email')
+assert.match(vcPage, /saw v1/, "owner sees who hasn't opened the latest version")
+assert.match(vcPage, /Signed-out visitors<\/strong><\/div><div class="note">2 browsers · 3 views/, 'anonymous viewers are only counted')
+res = await view(other, `/a/${vc.id}`)
+assert.ok(!(await res.text()).includes('data-views'), 'non-owners never see the counter')
+await call('set_visibility', { artifact_id: vc.id, visibility: 'invited', invited_emails: ['ana@acme.com', 'other@posthog.com'] })
+await view(await guestLogin('ana@acme.com'), `/a/${vc.id}`)
+await view(await guestLogin('other@posthog.com'), `/a/${vc.id}`)
+await settle()
+vcPage = await (await view(owner, `/a/${vc.id}`)).text()
+assert.match(vcPage, /<span class="views-count">4 viewers · 8 views<\/span>/, 'a colleague let in through the invite list counts once')
+assert.match(vcPage, />ana@acme\.com<\/strong>/, 'owner sees guests by email')
+assert.match(vcPage, /Guest · 1 view/)
+await call('delete_artifact', { artifact_id: vc.id })
+step('view counter: owner only, unique + total, names and emails, owner views excluded')
+
 // Revocation cuts off web sessions and MCP tokens immediately
 const kv = (...args) => execFileSync('pnpm', ['exec', 'wrangler', 'kv', 'key', ...args, '--binding', 'OAUTH_KV', '--local'], { stdio: 'ignore' })
 // Links the owner already holds (their iframe, and a handover link that may have been pasted somewhere) die too.

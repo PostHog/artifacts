@@ -220,6 +220,13 @@ details.pop > summary::-webkit-details-marker { display: none; }
 .version .row { display: flex; justify-content: space-between; gap: 8px; }
 .version .note { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
 
+.viewer-row { padding: 8px; font-size: 13px; border-radius: 6px; }
+.viewer-row .row { display: flex; justify-content: space-between; gap: 8px; }
+.viewer-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer-row .muted { flex: none; }
+.viewer-row .note { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+.views-count { white-space: nowrap; font-size: 13px; }
+
 .agent-option {
     display: block;
     width: 100%;

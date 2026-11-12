@@ -374,9 +374,76 @@ export async function deleteArtifact(env: AppEnv, user: User, id: string): Promi
         env.DB.prepare('DELETE FROM versions WHERE artifact_id = ?').bind(id),
         env.DB.prepare('DELETE FROM artifact_invites WHERE artifact_id = ?').bind(id),
         env.DB.prepare('DELETE FROM comments WHERE artifact_id = ?').bind(id),
+        env.DB.prepare('DELETE FROM artifact_views WHERE artifact_id = ?').bind(id),
         env.DB.prepare('DELETE FROM artifacts WHERE id = ?').bind(id),
     ])
     if (keys.length) await env.BUCKET.delete(keys)
+}
+
+// --- Views (the owner's view counter) ----------------------------------------------
+
+/** Who viewed an artifact. Staff and guests by email; anonymous browsers by their analytics cookie ID. */
+export type Viewer =
+    | { kind: 'staff'; email: string; name: string }
+    | { kind: 'guest'; email: string }
+    | { kind: 'anonymous'; id: string }
+
+export interface ViewRow {
+    viewer_kind: 'staff' | 'guest' | 'anonymous'
+    email: string | null
+    name: string | null
+    views: number
+    first_viewed_at: number
+    last_viewed_at: number
+    last_version: number
+}
+
+export interface ViewStats {
+    total: number
+    unique: number
+    /** Named viewers (staff and guests), most recent first. Anonymous viewers are only counted. */
+    viewers: ViewRow[]
+    anonymous: { viewers: number; views: number }
+}
+
+/** Records one view by someone other than the owner (callers skip the owner). */
+export async function recordView(env: AppEnv, artifactId: string, version: number, viewer: Viewer): Promise<void> {
+    const now = Date.now()
+    const key = viewer.kind === 'anonymous' ? `anon:${viewer.id}` : viewer.email.toLowerCase()
+    const email = viewer.kind === 'anonymous' ? null : viewer.email.toLowerCase()
+    const name = viewer.kind === 'staff' ? viewer.name : null
+    await env.DB.prepare(
+        `INSERT INTO artifact_views (artifact_id, viewer_key, viewer_kind, email, name, views, first_viewed_at, last_viewed_at, last_version)
+         VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+         ON CONFLICT (artifact_id, viewer_key) DO UPDATE SET
+           views = views + 1, last_viewed_at = excluded.last_viewed_at, last_version = excluded.last_version,
+           viewer_kind = excluded.viewer_kind, name = COALESCE(excluded.name, name)`
+    )
+        .bind(artifactId, key, viewer.kind, email, name, now, now, version)
+        .run()
+}
+
+/** View counts for the owner. Reads at most `limit` named viewers. */
+export async function viewStats(env: AppEnv, artifactId: string, limit = 200): Promise<ViewStats> {
+    const [totals, named] = await env.DB.batch([
+        env.DB.prepare(
+            `SELECT COALESCE(SUM(views), 0) AS total, COUNT(*) AS uniq,
+                    COALESCE(SUM(CASE WHEN viewer_kind = 'anonymous' THEN views END), 0) AS anon_views,
+                    COUNT(CASE WHEN viewer_kind = 'anonymous' THEN 1 END) AS anon_viewers
+             FROM artifact_views WHERE artifact_id = ?`
+        ).bind(artifactId),
+        env.DB.prepare(
+            `SELECT viewer_kind, email, name, views, first_viewed_at, last_viewed_at, last_version FROM artifact_views
+             WHERE artifact_id = ? AND viewer_kind != 'anonymous' ORDER BY last_viewed_at DESC LIMIT ?`
+        ).bind(artifactId, limit),
+    ])
+    const t = (totals!.results[0] ?? {}) as { total?: number; uniq?: number; anon_views?: number; anon_viewers?: number }
+    return {
+        total: t.total ?? 0,
+        unique: t.uniq ?? 0,
+        viewers: named!.results as unknown as ViewRow[],
+        anonymous: { viewers: t.anon_viewers ?? 0, views: t.anon_views ?? 0 },
+    }
 }
 
 export function contentTypeFor(format: Format): string {

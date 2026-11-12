@@ -2,7 +2,7 @@ import type { ConsentDescription } from '@cloudflare/workers-oauth-provider'
 import { html, raw } from 'hono/html'
 import type { HtmlEscapedString } from 'hono/utils/html'
 import type { User } from '../env'
-import type { Artifact, Comment, Commenter, Version } from '../store'
+import type { Artifact, Comment, Commenter, Version, ViewStats } from '../store'
 import { SANDBOX } from './content'
 
 type Html = HtmlEscapedString | Promise<HtmlEscapedString>
@@ -179,9 +179,38 @@ interface ViewerOptions {
     owner: boolean
     frameSrc: string
     shareUrl: string
+    /** Who has viewed it, shown to the owner only. */
+    views: ViewStats | null
 }
 
-export function viewerPage({ comments, user, guest, invites, artifact, versions, version, owner, frameSrc, shareUrl }: ViewerOptions) {
+const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`
+
+/** The owner's view counter: totals in the bar, who viewed it in the popover. */
+function viewsPanel(artifact: Artifact, views: ViewStats) {
+    const summary = `${plural(views.unique, 'viewer')} · ${plural(views.total, 'view')}`
+    const shown = views.viewers.length
+    const hiddenNamed = views.unique - views.anonymous.viewers - shown
+    return html`<details class="pop" data-close-outside data-views>
+    <summary class="ghost" title="Who has viewed this artifact"><span class="views-count">${summary}</span></summary>
+    <div class="panel right">
+      <h3>${summary}</h3>
+      <p class="hint">Not counting your own views. Counted since view tracking started, so older visits aren't included.</p>
+      ${views.unique === 0 ? html`<p class="hint">No one else has viewed this yet.</p>` : ''}
+      ${views.viewers.map(
+          (v) => html`<div class="viewer-row">
+        <div class="row"><strong title="${v.email ?? ''}">${v.viewer_kind === 'staff' ? v.name || v.email : v.email}</strong><span class="muted">${relativeTime(v.last_viewed_at)}</span></div>
+        <div class="note">${v.viewer_kind === 'guest' ? 'Guest · ' : v.name && v.name !== v.email ? `${v.email} · ` : ''}${plural(v.views, 'view')}${v.last_version < artifact.latest_version ? html` · <span title="They haven't opened the latest version">saw v${v.last_version}</span>` : ''}</div>
+      </div>`
+      )}
+      ${hiddenNamed > 0 ? html`<p class="hint">And ${plural(hiddenNamed, 'more person', 'more people')}.</p>` : ''}
+      ${views.anonymous.viewers > 0
+          ? html`<div class="viewer-row"><div class="row"><strong>Signed-out visitors</strong></div><div class="note">${plural(views.anonymous.viewers, 'browser')} · ${plural(views.anonymous.views, 'view')}</div></div>`
+          : ''}
+    </div>
+  </details>`
+}
+
+export function viewerPage({ comments, user, guest, invites, artifact, versions, version, owner, frameSrc, shareUrl, views }: ViewerOptions) {
     const isLatest = version.version === artifact.latest_version
     const author = artifact.owner_name ?? artifact.owner_email
 
@@ -258,6 +287,7 @@ export function viewerPage({ comments, user, guest, invites, artifact, versions,
 
     const actions = html`<button class="ghost hide-sm" type="button" data-fullscreen title="Full screen">${expandIcon}</button>
   ${comments ? commentsPanel(artifact, comments) : ''}
+  ${views ? viewsPanel(artifact, views) : ''}
   ${handover}
   ${share}`
 

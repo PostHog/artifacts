@@ -8,7 +8,7 @@ import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/poli
 import { type Guest, clearGuestCookie, getGuest, getGuestIdentity, guestCookie, normalizeEmail } from '../lib/guest'
 import { LoginError, beginPostHogLogin, clientMetadata, finishPostHogLogin, loginErrorMessage } from '../lib/posthog-oauth'
 import { clearSessionCookie, getUser, isAllowedEmail, isLocal, isRevoked, safeNext, serializeCookie, sessionCookie } from '../lib/session'
-import { type Commenter, StoreError, addComment, cleanAnchor, deleteComment, getArtifact, getVersion, isInvited, isOwner, listArtifacts, listComments, listInvites, listVersions, setCommentsEnabled, setVisibility, shareUrl } from '../store'
+import { type Commenter, type Viewer, StoreError, addComment, cleanAnchor, deleteComment, getArtifact, getVersion, isInvited, isOwner, listArtifacts, listComments, listInvites, listVersions, setCommentsEnabled, setVisibility, shareUrl, recordView, viewStats } from '../store'
 import { type AgentTarget, type FrameAccess, agentContentUrl, contentOrigin, frameUrl, serveAgentContent, serveContent } from './content'
 import { claudeCodeLink, codexLink, handoverPrompt } from './handover'
 import type { CommentsView } from './templates'
@@ -312,6 +312,15 @@ async function viewerActor(c: Context<Env>, view: Extract<ViewAccess, { ok: true
     return { kind: 'anonymous', id: anon.id }
 }
 
+/** Who to show the owner in the view counter. Staff by name and email, guests by email, anonymous by cookie. */
+function viewerFor(c: Context<Env>, view: Extract<ViewAccess, { ok: true }>, actor: ViewerActor): Viewer {
+    const user = c.get('user')
+    if (user) return { kind: 'staff', email: user.email, name: user.name }
+    const guest = view.guestIdentity
+    if (guest) return isAllowedEmail(c.env, guest.email) ? { kind: 'staff', email: guest.email, name: guest.email.split('@')[0]! } : { kind: 'guest', email: guest.email }
+    return { kind: 'anonymous', id: actor.kind === 'anonymous' ? actor.id : crypto.randomUUID() }
+}
+
 app.get('/a/:id', async (c) => {
     const user = c.get('user')
     const view = await viewAccess(c, c.req.param('id'))
@@ -344,6 +353,8 @@ app.get('/a/:id', async (c) => {
 
     c.header('Cache-Control', 'private, no-store')
     const actor = await viewerActor(c, view, true)
+    // The owner's view counter. Never counts the owner; kept off the response path.
+    if (!owner) c.executionCtx.waitUntil(recordView(c.env, artifact.id, version.version, viewerFor(c, view, actor)).catch((error) => console.error('record view failed', error)))
     track(
         c.env,
         c.executionCtx,
@@ -368,6 +379,7 @@ app.get('/a/:id', async (c) => {
             artifact,
             versions: owner ? await listVersions(c.env, artifact.id, 100) : [],
             invites: owner ? await listInvites(c.env, artifact.id) : [],
+            views: owner ? await viewStats(c.env, artifact.id) : null,
             comments: commentsView,
             version,
             owner,

@@ -40,6 +40,18 @@ The owner can turn comments on for an artifact (off by default, so nothing alrea
 - **On a passage:** select text in the artifact and a **Comment** button appears next to the selection. Pressing it opens the panel with the passage quoted above the box. Commented passages are highlighted in the artifact; clicking one jumps to its comment, and clicking a comment's quote scrolls the passage into view (and switches slide, in a deck). Works for HTML, Markdown and slides, on the latest version while comments are on. Passages are stored as the quoted text plus up to 64 characters either side, not a DOM position, so when the author publishes a new version a comment whose text has gone shows "Can't find this text in this version" instead of pointing at the wrong place. Highlighting uses the CSS Custom Highlight API, so a browser without it still gets the button, quotes and comments but no highlight.
 - **Not included:** replies, edits and notifications. Claude can read comments, with the quoted text as `on_text`, using `list_comments`.
 
+### View counter
+
+The owner sees how many people have viewed an artifact in the viewer bar, for example **12 viewers · 40 views**. Clicking it lists who:
+
+- **Staff** by name, with their email on hover.
+- **Invited guests** by email, marked as guests.
+- **Signed-out visitors** of public links, counted together as browsers and views, never listed.
+
+Each viewer shows their view count, when they last viewed it, and **saw v3** when they haven't opened the latest version. The owner's own views are never counted. A colleague who opens it through an invite list counts as the same person as when they're signed in, since both are keyed by email. Signed-out browsers are told apart by the one-year `aid` analytics cookie, so a browser that blocks cookies counts as a new viewer each time.
+
+Views are written to D1 (`artifact_views`) after the response is sent, and only the owner's page reads them. They don't come from PostHog analytics, so they're exact and immediate, and work with analytics off. Counting started with this feature, so earlier visits aren't included.
+
 ### Open in Claude Code or Codex
 
 Anyone who can view an artifact (the owner, staff, invited guests, public viewers) can hand it to a coding agent from the **Open in agent** button in the viewer bar. It offers:
