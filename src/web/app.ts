@@ -258,14 +258,17 @@ const COMMENT_ERRORS: Record<string, string> = {
 }
 
 /** What a visitor sees at an invited artifact until they've signed in as someone on the list. Shows nothing about the artifact. */
-function guestGate(c: Context<Env>, id: string) {
+function guestGate(c: Context<Env>, id: string, signedInAs?: string) {
     c.header('Cache-Control', 'no-store')
+    // Signed in as someone not on the list: say so, instead of sending them round the same sign-in again.
+    if (signedInAs) return c.html(guestGatePage({ id, signedInAs }), 403)
     return c.html(guestGatePage({ id, error: loginErrorMessage(c.req.query('error')) }))
 }
 
 type ViewAccess =
     | { ok: true; artifact: Artifact; owner: boolean; access: FrameAccess; guest: string | null; guestIdentity: Guest | null }
-    | { ok: false; deny: 'gate' | 'login' | 'not_found' }
+    | { ok: false; deny: 'gate'; signedInAs?: string }
+    | { ok: false; deny: 'login' | 'not_found' }
 
 /**
  * Whether this request may view the artifact, and as whom. The one place viewing is decided: the viewer page
@@ -285,7 +288,8 @@ async function viewAccess(c: Context<Env>, id: string): Promise<ViewAccess> {
         // Staff who aren't the owner go through the same gate; being signed in earns nothing here.
         const guestIdentity = await getGuestIdentity(c.env, c.req.raw)
         const guest = guestIdentity?.email ?? null
-        if (!guest || !(await isInvited(c.env, artifact.id, guest))) return { ok: false, deny: 'gate' }
+        if (!guest) return { ok: false, deny: 'gate' }
+        if (!(await isInvited(c.env, artifact.id, guest))) return { ok: false, deny: 'gate', signedInAs: guest }
         return { ok: true, artifact, owner, access: 'invited', guest, guestIdentity }
     }
     // Every signed-in user is verified PostHog staff (see isAllowedEmail), so "signed in" is "on the team".
@@ -316,7 +320,7 @@ app.get('/a/:id', async (c) => {
     const user = c.get('user')
     const view = await viewAccess(c, c.req.param('id'))
     if (!view.ok) {
-        if (view.deny === 'gate') return guestGate(c, c.req.param('id'))
+        if (view.deny === 'gate') return guestGate(c, c.req.param('id'), view.signedInAs)
         return view.deny === 'login' ? loginRedirect(c) : notFound(c)
     }
     const { artifact, owner, guest, access } = view
