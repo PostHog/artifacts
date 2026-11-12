@@ -435,9 +435,12 @@ export async function recordView(env: AppEnv, artifactId: string, version: numbe
         await env.DB.prepare(upsert('?2')).bind(artifactId, email, viewer.kind, email, name, now, version).run()
         return
     }
-    // One statement, so the cap check and the write can't interleave with another view's.
+    // One statement, so the cap check and the write can't interleave with another view's. The order keeps it cheap:
+    // a known browser and a full artifact are each one index lookup. The count over the artifact's signed-out rows
+    // only runs while it's below the cap and a new browser arrives, so it runs at most ANON_VIEW_CAP times per artifact.
     const keySql = `CASE
            WHEN EXISTS (SELECT 1 FROM artifact_views WHERE artifact_id = ?1 AND viewer_key = ?2) THEN ?2
+           WHEN EXISTS (SELECT 1 FROM artifact_views WHERE artifact_id = ?1 AND viewer_key = '${ANON_OVERFLOW_KEY}') THEN '${ANON_OVERFLOW_KEY}'
            WHEN (SELECT COUNT(*) FROM artifact_views WHERE artifact_id = ?1 AND viewer_kind = 'anonymous' AND viewer_key != '${ANON_OVERFLOW_KEY}') < ?8 THEN ?2
            ELSE '${ANON_OVERFLOW_KEY}' END`
     await env.DB.prepare(upsert(keySql)).bind(artifactId, `anon:${viewer.id}`, 'anonymous', null, null, now, version, anonViewCap(env)).run()

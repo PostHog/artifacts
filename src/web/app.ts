@@ -4,7 +4,7 @@ import type { AppEnv, User } from '../env'
 import { type ViewerActor, type ViewerType, actorIdentity, anonymousId, guestAnalyticsId, track } from '../lib/analytics'
 import type { Artifact } from '../store'
 import { deriveSecret } from '../lib/crypto'
-import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/policy'
+import { ipRateLimitKey, isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/policy'
 import { type Guest, clearGuestCookie, getGuest, getGuestIdentity, guestCookie, normalizeEmail } from '../lib/guest'
 import { LoginError, beginPostHogLogin, clientMetadata, finishPostHogLogin, loginErrorMessage } from '../lib/posthog-oauth'
 import { clearSessionCookie, getUser, isAllowedEmail, isLocal, isRevoked, safeNext, serializeCookie, sessionCookie } from '../lib/session'
@@ -360,8 +360,8 @@ app.get('/a/:id', async (c) => {
         c.executionCtx.waitUntil(
             (async () => {
                 if (viewer.kind === 'anonymous') {
-                    const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
-                    if (!(await c.env.VIEW_LIMITER.limit({ key: `${ip}:${artifact.id}` })).success) return
+                    const client = ipRateLimitKey(c.req.header('CF-Connecting-IP'))
+                    if (!(await c.env.VIEW_LIMITER.limit({ key: `${client}:${artifact.id}` })).success) return
                 }
                 await recordView(c.env, artifact.id, version.version, viewer)
             })().catch((error) => console.error('record view failed', error))

@@ -782,16 +782,41 @@ assert.match(vcPage, /Guest · 1 view/)
 await call('delete_artifact', { artifact_id: vc.id })
 step('view counter: owner only, unique + total, names and emails, owner views excluded')
 
+// The cap on signed-out browsers per artifact is 10,000 in production, far more than a smoke run sends. To check it,
+// start the server with a small cap and pass the same number: `pnpm dev --var ANON_VIEW_CAP:3`, SMOKE_ANON_VIEW_CAP=3.
+const smokeCap = Number(process.env.SMOKE_ANON_VIEW_CAP)
+const anonCap = Number.isInteger(smokeCap) && smokeCap > 0 ? smokeCap : Infinity
+const anonCounts = (browsers, views) => {
+    const shown = Math.min(browsers, anonCap)
+    return { summary: `${shown} ${shown === 1 ? 'viewer' : 'viewers'} · ${views} views`, browsers: browsers > anonCap ? `${shown}+ browsers` : `${shown} browsers` }
+}
+
 // Anyone with a public link can send signed-out views, so they're rate-limited per IP and artifact (20 a minute).
 const flood = await call('publish_artifact', { title: 'Flooded', format: 'markdown', content: '# Flood', visibility: 'public' })
 for (let i = 0; i < 25; i++) await view(null, `/a/${flood.id}`)
 await settle()
-res = await view(owner, `/a/${flood.id}`)
-assert.match(await res.text(), /<span class="views-count">20 viewers · 20 views<\/span>/, 'signed-out views past the rate limit are not recorded')
+let expected = anonCounts(20, 20)
+let floodPage = await (await view(owner, `/a/${flood.id}`)).text()
+assert.ok(floodPage.includes(`<span class="views-count">${expected.summary}</span>`), 'signed-out views past the rate limit are not recorded')
+assert.ok(floodPage.includes(`${expected.browsers} · 20 views`))
 res = await view(null, `/a/${flood.id}`)
 assert.equal(res.status, 200, 'the page still loads past the limit')
 await call('delete_artifact', { artifact_id: flood.id })
 step('view counter: signed-out views are rate-limited per IP and artifact')
+if (anonCap !== Infinity) step(`view counter: at most ${anonCap} signed-out browsers per artifact; the rest still count as views`)
+else console.log('  (cap not exercised: set SMOKE_ANON_VIEW_CAP and start the server with the same ANON_VIEW_CAP)')
+
+// IPv6: one host usually holds a whole /64, so the limit is per /64. The last view, from another /64, must count:
+// that also shows the server used the CF-Connecting-IP we sent rather than its own.
+const v6 = await call('publish_artifact', { title: 'IPv6 flood', format: 'markdown', content: '# v6', visibility: 'public' })
+for (let i = 1; i <= 25; i++) await request(null, `/a/${v6.id}`, { headers: { 'CF-Connecting-IP': `2001:db8:1:2::${i.toString(16)}` } })
+await request(null, `/a/${v6.id}`, { headers: { 'CF-Connecting-IP': '2001:db8:1:3::1' } })
+await settle()
+expected = anonCounts(21, 21)
+res = await view(owner, `/a/${v6.id}`)
+assert.ok((await res.text()).includes(`<span class="views-count">${expected.summary}</span>`), 'rotating addresses within one IPv6 /64 shares one limit')
+await call('delete_artifact', { artifact_id: v6.id })
+step('view counter: the limit is per IPv6 /64')
 
 // Revocation cuts off web sessions and MCP tokens immediately
 const kv = (...args) => execFileSync('pnpm', ['exec', 'wrangler', 'kv', 'key', ...args, '--binding', 'OAUTH_KV', '--local'], { stdio: 'ignore' })
