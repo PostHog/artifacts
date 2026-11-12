@@ -782,6 +782,17 @@ assert.match(vcPage, /Guest · 1 view/)
 await call('delete_artifact', { artifact_id: vc.id })
 step('view counter: owner only, unique + total, names and emails, owner views excluded')
 
+// Anyone with a public link can send signed-out views, so they're rate-limited per IP and artifact (20 a minute).
+const flood = await call('publish_artifact', { title: 'Flooded', format: 'markdown', content: '# Flood', visibility: 'public' })
+for (let i = 0; i < 25; i++) await view(null, `/a/${flood.id}`)
+await settle()
+res = await view(owner, `/a/${flood.id}`)
+assert.match(await res.text(), /<span class="views-count">20 viewers · 20 views<\/span>/, 'signed-out views past the rate limit are not recorded')
+res = await view(null, `/a/${flood.id}`)
+assert.equal(res.status, 200, 'the page still loads past the limit')
+await call('delete_artifact', { artifact_id: flood.id })
+step('view counter: signed-out views are rate-limited per IP and artifact')
+
 // Revocation cuts off web sessions and MCP tokens immediately
 const kv = (...args) => execFileSync('pnpm', ['exec', 'wrangler', 'kv', 'key', ...args, '--binding', 'OAUTH_KV', '--local'], { stdio: 'ignore' })
 // Links the owner already holds (their iframe, and a handover link that may have been pasted somewhere) die too.

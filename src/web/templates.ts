@@ -204,7 +204,7 @@ function viewsPanel(artifact: Artifact, views: ViewStats) {
       )}
       ${hiddenNamed > 0 ? html`<p class="hint">And ${plural(hiddenNamed, 'more person', 'more people')}.</p>` : ''}
       ${views.anonymous.viewers > 0
-          ? html`<div class="viewer-row"><div class="row"><strong>Signed-out visitors</strong></div><div class="note">${plural(views.anonymous.viewers, 'browser')} · ${plural(views.anonymous.views, 'view')}</div></div>`
+          ? html`<div class="viewer-row"><div class="row"><strong>Signed-out visitors</strong></div><div class="note">${views.anonymous.capped ? `${views.anonymous.viewers.toLocaleString('en-US')}+ browsers` : plural(views.anonymous.viewers, 'browser')} · ${plural(views.anonymous.views, 'view')}</div></div>`
           : ''}
     </div>
   </details>`

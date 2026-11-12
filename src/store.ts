@@ -403,33 +403,55 @@ export interface ViewStats {
     unique: number
     /** Named viewers (staff and guests), most recent first. Anonymous viewers are only counted. */
     viewers: ViewRow[]
-    anonymous: { viewers: number; views: number }
+    /** `capped`: the artifact hit its cap of signed-out browsers, so `viewers` is a floor. */
+    anonymous: { viewers: number; views: number; capped: boolean }
 }
 
-/** Records one view by someone other than the owner (callers skip the owner). */
+export const ANON_OVERFLOW_KEY = 'anon:overflow'
+const DEFAULT_ANON_VIEW_CAP = 10_000
+
+const anonViewCap = (env: AppEnv) => {
+    const cap = Number(env.ANON_VIEW_CAP)
+    return Number.isInteger(cap) && cap > 0 ? cap : DEFAULT_ANON_VIEW_CAP
+}
+
+/**
+ * Records one view by someone other than the owner (callers skip the owner, and rate-limit signed-out views).
+ * Staff and guests are keyed by verified email, so their rows are bounded by who can sign in. Signed-out browsers
+ * are keyed by an unsigned cookie anyone can vary, so an artifact keeps at most ANON_VIEW_CAP of them: once it's
+ * full, a new browser's view goes to one overflow row, which keeps the total right without adding rows.
+ */
 export async function recordView(env: AppEnv, artifactId: string, version: number, viewer: Viewer): Promise<void> {
     const now = Date.now()
-    const key = viewer.kind === 'anonymous' ? `anon:${viewer.id}` : viewer.email.toLowerCase()
     const email = viewer.kind === 'anonymous' ? null : viewer.email.toLowerCase()
     const name = viewer.kind === 'staff' ? viewer.name : null
-    await env.DB.prepare(
+    const upsert = (keySql: string) =>
         `INSERT INTO artifact_views (artifact_id, viewer_key, viewer_kind, email, name, views, first_viewed_at, last_viewed_at, last_version)
-         VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+         VALUES (?1, ${keySql}, ?3, ?4, ?5, 1, ?6, ?6, ?7)
          ON CONFLICT (artifact_id, viewer_key) DO UPDATE SET
            views = views + 1, last_viewed_at = excluded.last_viewed_at, last_version = excluded.last_version,
            viewer_kind = excluded.viewer_kind, name = COALESCE(excluded.name, name)`
-    )
-        .bind(artifactId, key, viewer.kind, email, name, now, now, version)
-        .run()
+    if (viewer.kind !== 'anonymous') {
+        await env.DB.prepare(upsert('?2')).bind(artifactId, email, viewer.kind, email, name, now, version).run()
+        return
+    }
+    // One statement, so the cap check and the write can't interleave with another view's.
+    const keySql = `CASE
+           WHEN EXISTS (SELECT 1 FROM artifact_views WHERE artifact_id = ?1 AND viewer_key = ?2) THEN ?2
+           WHEN (SELECT COUNT(*) FROM artifact_views WHERE artifact_id = ?1 AND viewer_kind = 'anonymous' AND viewer_key != '${ANON_OVERFLOW_KEY}') < ?8 THEN ?2
+           ELSE '${ANON_OVERFLOW_KEY}' END`
+    await env.DB.prepare(upsert(keySql)).bind(artifactId, `anon:${viewer.id}`, 'anonymous', null, null, now, version, anonViewCap(env)).run()
 }
 
 /** View counts for the owner. Reads at most `limit` named viewers. */
 export async function viewStats(env: AppEnv, artifactId: string, limit = 200): Promise<ViewStats> {
     const [totals, named] = await env.DB.batch([
         env.DB.prepare(
-            `SELECT COALESCE(SUM(views), 0) AS total, COUNT(*) AS uniq,
+            `SELECT COALESCE(SUM(views), 0) AS total,
+                    COUNT(CASE WHEN viewer_key != '${ANON_OVERFLOW_KEY}' THEN 1 END) AS uniq,
                     COALESCE(SUM(CASE WHEN viewer_kind = 'anonymous' THEN views END), 0) AS anon_views,
-                    COUNT(CASE WHEN viewer_kind = 'anonymous' THEN 1 END) AS anon_viewers
+                    COUNT(CASE WHEN viewer_kind = 'anonymous' AND viewer_key != '${ANON_OVERFLOW_KEY}' THEN 1 END) AS anon_viewers,
+                    COUNT(CASE WHEN viewer_key = '${ANON_OVERFLOW_KEY}' THEN 1 END) AS capped
              FROM artifact_views WHERE artifact_id = ?`
         ).bind(artifactId),
         env.DB.prepare(
@@ -437,12 +459,12 @@ export async function viewStats(env: AppEnv, artifactId: string, limit = 200): P
              WHERE artifact_id = ? AND viewer_kind != 'anonymous' ORDER BY last_viewed_at DESC LIMIT ?`
         ).bind(artifactId, limit),
     ])
-    const t = (totals!.results[0] ?? {}) as { total?: number; uniq?: number; anon_views?: number; anon_viewers?: number }
+    const t = (totals!.results[0] ?? {}) as { total?: number; uniq?: number; anon_views?: number; anon_viewers?: number; capped?: number }
     return {
         total: t.total ?? 0,
         unique: t.uniq ?? 0,
         viewers: named!.results as unknown as ViewRow[],
-        anonymous: { viewers: t.anon_viewers ?? 0, views: t.anon_views ?? 0 },
+        anonymous: { viewers: t.anon_viewers ?? 0, views: t.anon_views ?? 0, capped: (t.capped ?? 0) > 0 },
     }
 }
 

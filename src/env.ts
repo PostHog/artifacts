@@ -22,6 +22,9 @@ export interface AppEnv {
     POSTHOG_HOST?: string
     PUBLISH_LIMITER: RateLimit
     COMMENT_LIMITER: RateLimit
+    VIEW_LIMITER: RateLimit
+    /** Most signed-out browsers recorded per artifact (src/store.ts recordView). Default 10000. */
+    ANON_VIEW_CAP?: string
     REGISTER_LIMITER: RateLimit
 }
 

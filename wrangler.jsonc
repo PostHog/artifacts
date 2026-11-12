@@ -29,7 +29,10 @@
     "DEV_LOGIN": "false",
     // Usage analytics go to project 2. Project tokens are public. "" turns analytics off.
     "POSTHOG_PROJECT_TOKEN": "sTMFPsFhdP1Ssg",
-    "POSTHOG_HOST": "https://us.i.posthog.com"
+    "POSTHOG_HOST": "https://us.i.posthog.com",
+    // Most separate signed-out browsers recorded per artifact for the view counter. Views from further browsers
+    // still count, folded into one overflow row, so the table can't grow without bound.
+    "ANON_VIEW_CAP": "10000"
   },
   // Provisioned by the first deploy, then pinned here so a Worker rename can't silently provision empty replacements.
   // The schema is applied by the Worker itself (src/lib/migrate.ts), so deploys need no migration step.
@@ -41,6 +44,9 @@
     { "name": "PUBLISH_LIMITER", "namespace_id": "4201", "simple": { "limit": 30, "period": 60 } },
     { "name": "REGISTER_LIMITER", "namespace_id": "4202", "simple": { "limit": 10, "period": 60 } },
     // Comments, per commenter.
-    { "name": "COMMENT_LIMITER", "namespace_id": "4205", "simple": { "limit": 10, "period": 60 } }
+    { "name": "COMMENT_LIMITER", "namespace_id": "4205", "simple": { "limit": 10, "period": 60 } },
+    // Signed-out views recorded for the owner's view counter, per IP and artifact. Over the limit the page
+    // still loads; the view just isn't counted.
+    { "name": "VIEW_LIMITER", "namespace_id": "4206", "simple": { "limit": 20, "period": 60 } }
   ]
 }

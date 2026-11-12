@@ -353,8 +353,20 @@ app.get('/a/:id', async (c) => {
 
     c.header('Cache-Control', 'private, no-store')
     const actor = await viewerActor(c, view, true)
-    // The owner's view counter. Never counts the owner; kept off the response path.
-    if (!owner) c.executionCtx.waitUntil(recordView(c.env, artifact.id, version.version, viewerFor(c, view, actor)).catch((error) => console.error('record view failed', error)))
+    // The owner's view counter. Never counts the owner; kept off the response path. Signed-out views are
+    // rate-limited per IP and artifact, since anyone with a public link can send them (see recordView for the cap).
+    if (!owner) {
+        const viewer = viewerFor(c, view, actor)
+        c.executionCtx.waitUntil(
+            (async () => {
+                if (viewer.kind === 'anonymous') {
+                    const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
+                    if (!(await c.env.VIEW_LIMITER.limit({ key: `${ip}:${artifact.id}` })).success) return
+                }
+                await recordView(c.env, artifact.id, version.version, viewer)
+            })().catch((error) => console.error('record view failed', error))
+        )
+    }
     track(
         c.env,
         c.executionCtx,
