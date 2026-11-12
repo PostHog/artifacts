@@ -41,6 +41,8 @@
     { "name": "PUBLISH_LIMITER", "namespace_id": "4201", "simple": { "limit": 30, "period": 60 } },
     { "name": "REGISTER_LIMITER", "namespace_id": "4202", "simple": { "limit": 10, "period": 60 } },
     // Comments, per commenter.
-    { "name": "COMMENT_LIMITER", "namespace_id": "4205", "simple": { "limit": 10, "period": 60 } }
+    { "name": "COMMENT_LIMITER", "namespace_id": "4205", "simple": { "limit": 10, "period": 60 } },
+    // Quiz submissions, per taker (and per IP for signed-out ones).
+    { "name": "QUIZ_LIMITER", "namespace_id": "4206", "simple": { "limit": 10, "period": 60 } }
   ]
 }

@@ -105,6 +105,8 @@ export async function serveContent(env: AppEnv, request: Request, id: string, ve
     if (!grant || grant.id !== id || grant.v !== version) return refuse(403, 'This link has expired. Reload the artifact page.')
     if (!(await stillShared(env, grant))) return refuse(404, 'This artifact is no longer shared.')
     const meta = await getVersion(env, id, version)
+    // A quiz is rendered by the viewer page itself, never in an iframe: this route would serve its answer key.
+    if (meta?.format === 'quiz') return refuse(404, 'Not found')
     const content = meta && (await getContent(env, meta))
     if (!meta || content == null) return refuse(404, 'Not found')
     const rendered = meta.format === 'markdown' ? renderMarkdown(content) : meta.format === 'slides' ? renderSlides(content) : content
@@ -162,7 +164,9 @@ export async function serveAgentContent(env: AppEnv, request: Request, id: strin
     const meta = await getVersion(env, id, grant.v)
     const content = meta && (await getContent(env, meta))
     if (!meta || content == null) return { ok: false, response: refuse(404, 'Not found') }
-    const filename = `${id}-v${meta.version}.${meta.format === 'markdown' ? 'md' : 'html'}`
+    // A quiz's source is its answer key, so only the owner's grants may download it.
+    if (meta.format === 'quiz' && (grant.pub || grant.team || grant.guest)) return { ok: false, response: refuse(404, 'Not found') }
+    const filename = `${id}-v${meta.version}.${meta.format === 'markdown' ? 'md' : meta.format === 'quiz' ? 'json' : 'html'}`
     const response = new Response(content, {
         headers: {
             'Content-Type': 'text/plain; charset=utf-8',

@@ -13,6 +13,7 @@ const FORMAT_LABEL: Record<Format, string> = {
     markdown: 'a Markdown document',
     html: 'an HTML page',
     slides: 'an HTML slide deck (one <section> per slide, each a 1280×720 slide)',
+    quiz: 'a quiz as JSON, including its answer key',
 }
 
 /** Titles are author-controlled: keep them to one plain line so they can't add instructions of their own. */
@@ -22,7 +23,7 @@ function oneLine(text: string, max = 120): string {
 }
 
 export function handoverPrompt(input: { title: string; format: Format; version: number; shareUrl: string; contentUrl: string; id: string }): string {
-    const file = `artifact-${input.id}-v${input.version}.${input.format === 'markdown' ? 'md' : 'html'}`
+    const file = `artifact-${input.id}-v${input.version}.${input.format === 'markdown' ? 'md' : input.format === 'quiz' ? 'json' : 'html'}`
     const minutes = Math.round(AGENT_TOKEN_TTL / 60)
     return [
         `I'd like your help with a PostHog artifact: "${oneLine(input.title)}", version ${input.version}.`,

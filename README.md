@@ -27,7 +27,34 @@ Agent (curl) ────────▶ │ /a/:id/agent?t=…  raw source as t
   - Unsharing, removing someone from the list, or publishing a new version revokes iframe grants that are already open.
 - **Versioning:** each publish with an `artifact_id` adds an immutable version. Every version is stored under its own R2 key, so concurrent publishes can't clobber each other. The owner sees a version picker and a banner when viewing an old version.
 - **Untrusted content:** artifacts run in an iframe with `sandbox` (no `allow-same-origin`). The content response also carries a `Content-Security-Policy: sandbox` header, so it keeps an opaque origin even when opened top-level, and can't read cookies or call the app as the viewer. To isolate it further, set `CONTENT_URL` to a separate hostname. That host only serves `/c/*`.
-- **Formats:** `html` (a page), `slides` and `markdown` (rendered with PostHog typography). A `slides` artifact is an HTML document in which each `<section>` directly inside `<body>` is a 1280×720 slide. At serve time it's wrapped in a deck viewer (`src/web/slides.ts`) with a thumbnail rail, scale-to-fit, arrow-key navigation and a Present mode, all inside the same sandboxed iframe as any other content.
+- **Formats:** `html` (a page), `slides`, `markdown` and `quiz` (see Quizzes below). `slides` and `markdown` (rendered with PostHog typography). A `slides` artifact is an HTML document in which each `<section>` directly inside `<body>` is a 1280×720 slide. At serve time it's wrapped in a deck viewer (`src/web/slides.ts`) with a thumbnail rail, scale-to-fit, arrow-key navigation and a Present mode, all inside the same sandboxed iframe as any other content.
+
+### Quizzes
+
+A `quiz` artifact is questions people answer and get scored on. Unlike every other format it is **data, not HTML**: the author sends JSON, we validate it at publish, render it in the viewer page ourselves and score it on the server. That keeps the answer key out of the browser and out of any script, and makes a submission an ordinary same-origin form post. The schema is in the `publish_artifact` tool description.
+
+```json
+{
+  "intro": "Five minutes on `funnels`.",
+  "pass_mark": 70,
+  "attempts": 1,
+  "show_answers": false,
+  "questions": [
+    { "id": "q1", "type": "single", "prompt": "What does a funnel measure?",
+      "options": [{ "id": "a", "text": "Conversion between ordered steps" }, { "id": "b", "text": "Page load time" }],
+      "correct": ["a"], "explanation": "Shown only if show_answers is on." },
+    { "id": "q2", "type": "multi", "prompt": "Pick the events", "options": [...], "correct": ["x", "y"], "points": 2 },
+    { "id": "q3", "type": "true_false", "prompt": "Steps are ordered.", "correct": ["true"] }
+  ]
+}
+```
+
+- **Question types:** `single`, `multi` (choose all that apply; scored all or nothing, so it needs exactly the right set) and `true_false` (options optional). Text is plain, with `` `backticks` `` for inline code. Up to 50 questions of up to 10 options, each worth 1-100 points.
+- **Taking it:** the viewer page shows the questions, a submission is scored and stored, and the result is the score and pass or fail against `pass_mark` (default 70%). Correct answers and explanations are only shown on the result when the author sets `show_answers`, because otherwise a retake could copy the key. `attempts` is per person per version (default 1, `null` for unlimited), and a new version is a new quiz with its own attempts.
+- **Who can take it:** staff on team quizzes, invited guests on invited ones (recorded by email), and anyone with the link on public ones (recorded by an anonymous browser ID, with an optional typed name). The owner can try their own quiz: it's scored but marked a preview, never counted or limited.
+- **Results:** the owner gets a **Results** page and a `quiz_results` MCP tool: every counted attempt (who, score, pass or fail, when) and, per question, how many answered, how many got it right and how often each option was picked. Results are per version.
+- **For training, not exams:** there's no timer, proctoring or anti-cheat, and signed-out takers are whoever clears their cookies. The only guard is a rate limit and a ceiling of 5,000 attempts per quiz.
+- Passage comments don't apply to quizzes (they need the iframe); whole-artifact comments do.
 
 ### Comments
 
