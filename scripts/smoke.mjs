@@ -375,10 +375,16 @@ res = await view(anon, `/a/${inv.id}/signin/mars`)
 assert.equal(res.status, 404, 'unknown region refused')
 step('invited: gate shows nothing about the artifact (anonymous or signed-in staff)')
 
-// Signed in as a PostHog user who is NOT on the list: same gate, no access.
+// Signed in as a PostHog user who is NOT on the list: told so (not sent round the sign-in again), still nothing leaked.
+const NO_ACCESS = /You don't have access to this document/
 const stranger = await guestLogin('stranger@example.com')
 res = await view(stranger, `/a/${inv.id}`)
-assert.match(await res.text(), /Sign in to view this document/, 'a PostHog account alone is not enough')
+assert.equal(res.status, 403)
+const noAccess = await res.text()
+assert.match(noAccess, NO_ACCESS, 'a PostHog account alone is not enough')
+assert.ok(noAccess.includes('stranger@example.com'), 'names the account they are signed in with')
+assert.ok(noAccess.includes(`action="/a/${inv.id}/signout"`), 'offers a way to switch accounts')
+assert.ok(!noAccess.includes('Customer doc') && !noAccess.includes('<iframe') && !noAccess.includes('og:title'), 'no-access page leaks nothing')
 res = await frame(stranger, `/c/${inv.id}/1?t=forged`)
 assert.equal(res.status, 403)
 step('invited: having a PostHog account is not access; the allowlist decides')
@@ -409,7 +415,7 @@ res = await request(ana, `/a/${id}/visibility`, { method: 'POST', headers: { 'Co
 assert.equal(res.status, 401, 'guests cannot manage sharing')
 const other2 = await call('publish_artifact', { title: 'Other invited', format: 'html', content: '<h1>Other</h1>', visibility: 'invited', invited_emails: ['someone@else.com'] })
 res = await view(ana, `/a/${other2.id}`)
-assert.match(await res.text(), /Sign in to view this document/, 'allowlists are per artifact')
+assert.match(await res.text(), NO_ACCESS, 'allowlists are per artifact')
 await call('delete_artifact', { artifact_id: other2.id })
 step('invited: guests are not staff; allowlists are per artifact')
 
@@ -420,7 +426,7 @@ assert.equal(res.status, 200, 'domain entries admit people at that domain')
 for (const email of ['eve@evilglobex.com', 'eve@globex.com.evil.example', 'eve@sub.globex.com']) {
     const jar = await guestLogin(email)
     res = await view(jar, `/a/${inv.id}`)
-    assert.match(await res.text(), /Sign in to view this document/, `${email} is not on the list`)
+    assert.match(await res.text(), NO_ACCESS, `${email} is not on the list`)
 }
 step('invited: @domain entries match the domain exactly')
 
@@ -429,7 +435,7 @@ await call('set_visibility', { artifact_id: inv.id, visibility: 'invited', invit
 res = await frame(ana, guestFrame)
 assert.equal(res.status, 404, 'removing an address revokes their open frame grant')
 res = await view(ana, `/a/${inv.id}`)
-assert.match(await res.text(), /Sign in to view this document/, 'and sends them back to the gate')
+assert.match(await res.text(), NO_ACCESS, 'and tells them they no longer have access')
 res = await view(bob, `/a/${inv.id}`)
 assert.equal(res.status, 200, 'others on the list are unaffected')
 const bobFrame = await frameOf(await view(bob, `/a/${inv.id}`))

@@ -288,8 +288,22 @@ ${!isLatest
     })
 }
 
-export function guestGatePage({ id, error }: { id: string; error?: string }) {
+export function guestGatePage({ id, error, signedInAs }: { id: string; error?: string; signedInAs?: string }) {
     // Nothing here names the artifact or its author: the page looks the same for every invited artifact.
+    if (signedInAs) {
+        return layout({
+            title: 'No access · PostHog Artifacts',
+            body: html`${appBar({ user: null, next: `/a/${id}`, menu: html`` })}
+<main class="page narrow">
+  <h1>You don't have access to this document</h1>
+  <p class="lede">You're signed in as <strong>${signedInAs}</strong>, which isn't on the list of people it was shared with. Ask whoever sent you the link to add your address.</p>
+  <form method="post" action="/a/${id}/signout">
+    <button class="btn secondary" type="submit"><span>Use a different account</span></button>
+  </form>
+  <p class="small muted spaced">To pick another PostHog account, you may also need to sign out of PostHog first.</p>
+</main>`,
+        })
+    }
     return layout({
         title: 'View document · PostHog Artifacts',
         body: html`${appBar({ user: null, next: `/a/${id}`, menu: html`` })}
