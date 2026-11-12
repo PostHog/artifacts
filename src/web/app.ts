@@ -352,6 +352,10 @@ app.get('/a/:id', async (c) => {
         {
             artifact_id: artifact.id,
             artifact_owner: artifact.owner_email,
+            // Same name the viewer page shows as the author, so destinations can route per author (like QuoteHog's).
+            author_name: artifact.owner_name ?? artifact.owner_email,
+            artifact_title: artifact.title,
+            is_owner: owner,
             version: version.version,
             is_latest_version: version.version === artifact.latest_version,
             format: version.format,
