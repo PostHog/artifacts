@@ -134,7 +134,7 @@ Server-side events go to [project 2](https://us.posthog.com/project/2) via `post
 | `artifact visibility changed` | `set_visibility` or the Share button | `artifact_id`, `visibility`, `source` |
 | `artifact details updated` | `update_artifact` | `artifact_id`, `is_title_changed`, `is_description_changed` |
 | `artifact deleted` | `delete_artifact` | `artifact_id` |
-| `artifact viewed` | viewer page loads, once access is granted | `artifact_id`, `artifact_owner`, `version`, `access`, `viewer_type` |
+| `artifact viewed` | viewer page loads, once access is granted | `artifact_id`, `artifact_owner`, `author_name`, `artifact_title`, `is_owner`, `version`, `access`, `viewer_type` |
 | `artifact sent to agent` | an agent downloads a handover link | `artifact_id`, `version`, `format`, `access`, `target` (`claude_code`, `codex`, `copy`) |
 | `$mcp_tool_call` | every MCP tool call, via [MCP Analytics](https://posthog.com/docs/mcp-analytics/installation/typescript) (`@posthog/mcp`) | `$mcp_tool_name`, `$mcp_is_error`, `$mcp_duration_ms`, `$mcp_intent` |
 | `artifacts mcp client connected` | MCP OAuth completes | `client_id`, `is_consent_remembered` |
