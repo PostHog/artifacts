@@ -2,6 +2,8 @@ import type { ConsentDescription } from '@cloudflare/workers-oauth-provider'
 import { html, raw } from 'hono/html'
 import type { HtmlEscapedString } from 'hono/utils/html'
 import type { User } from '../env'
+import type { PublicQuiz, QuestionStats, QuizQuestion } from '../lib/quiz'
+import type { QuizAttempt } from '../quiz-store'
 import type { Artifact, Comment, Commenter, Version } from '../store'
 import { SANDBOX } from './content'
 
@@ -166,7 +168,141 @@ function commentsPanel(artifact: Artifact, { enabled, items, me, owner, open, er
   </details>`
 }
 
+// --- Quizzes -----------------------------------------------------------------------
+
+/** Plain text with `backticks` for inline code. Everything is escaped; only the code spans get a tag. */
+const inline = (text: string) => text.split('`').map((part, i) => (i % 2 ? html`<code>${part}</code>` : part))
+
+export interface QuizReveal {
+    id: string
+    prompt: string
+    options: { id: string; text: string; chosen: boolean; correct: boolean }[]
+    isCorrect: boolean
+    explanation?: string
+}
+
+export interface QuizView {
+    quiz: PublicQuiz
+    /** Signed-out takers can type a name; everyone else is known. */
+    needsName: boolean
+    isLatest: boolean
+    owner: boolean
+    /** Attempts this person still has on this version: null is unlimited. */
+    remaining: number | null
+    /** This person's own attempts, newest first. */
+    attempts: QuizAttempt[]
+    /** Set after submitting: the attempt to show, and (only if the author allows) how each answer fared. */
+    result?: { attempt: QuizAttempt; reveal: QuizReveal[] | null }
+    error?: string
+}
+
+const QUIZ_ERRORS: Record<string, string> = {
+    stale: 'This quiz was updated while you had it open. Reload the page and try again.',
+    invalid: 'Something was wrong with that submission. Reload the page and try again.',
+    limit: "You've used all your attempts.",
+    slow: 'Too many submissions. Wait a minute and try again.',
+    full: 'This quiz has reached its submission limit.',
+    again: 'That submission clashed with another one. Try again.',
+}
+export const quizErrorMessage = (code: string | undefined) => (code && Object.hasOwn(QUIZ_ERRORS, code) ? QUIZ_ERRORS[code] : undefined)
+
+function scoreCard(attempt: QuizAttempt, passMark: number, preview: boolean) {
+    return html`<div class="quiz-score ${attempt.passed ? 'pass' : 'fail'}">
+    <div class="big">${attempt.percent}%</div>
+    <div><strong>${attempt.passed ? 'Passed' : 'Not passed'}</strong>
+      <div class="muted small">${attempt.points} of ${attempt.max_points} points · pass mark ${passMark}%${preview ? ' · your preview, not counted' : ''}</div></div>
+  </div>`
+}
+
+function questionField(q: PublicQuiz['questions'][number], n: number) {
+    const kind = q.type === 'multi' ? 'checkbox' : 'radio'
+    return html`<fieldset class="quiz-q">
+    <legend><span class="muted">${n + 1}.</span> ${inline(q.prompt)}${q.points > 1 ? html` <span class="muted small">(${q.points} points)</span>` : ''}</legend>
+    ${q.type === 'multi' ? html`<p class="hint">Choose all that apply.</p>` : ''}
+    ${q.options.map((o) => html`<label class="choice"><input type="${kind}" name="q_${q.id}" value="${o.id}"><span>${inline(o.text)}</span></label>`)}
+  </fieldset>`
+}
+
+function quizBody(artifact: Artifact, view: QuizView) {
+    const { quiz, result, remaining, attempts, owner } = view
+    const past = attempts.filter((a) => !result || a.id !== result.attempt.id)
+    const form = html`<form method="post" action="/a/${artifact.id}/quiz" class="quiz-form">
+    <input type="hidden" name="v" value="${artifact.latest_version}">
+    ${quiz.questions.map(questionField)}
+    ${view.needsName ? html`<label class="quiz-name"><span class="muted small">Your name (optional)</span><input class="text" name="taker_name" maxlength="60" autocomplete="name"></label>` : ''}
+    <button class="btn lg" type="submit"><span>Submit answers</span></button>
+    ${remaining !== null && !owner ? html`<p class="hint">${remaining === 1 ? 'You have one attempt.' : `You have ${remaining} attempts.`}</p>` : ''}
+  </form>`
+
+    return html`<main class="quiz-wrap"><div class="quiz">
+  <h1>${artifact.title}</h1>
+  ${quiz.intro ? html`<p class="lede">${inline(quiz.intro)}</p>` : ''}
+  ${view.error ? html`<p class="error">${view.error}</p>` : ''}
+  ${result
+      ? html`${scoreCard(result.attempt, quiz.pass_mark, !!result.attempt.preview)}
+  ${result.reveal
+      ? html`<h2>Your answers</h2>${result.reveal.map(
+            (r, n) => html`<div class="quiz-q reveal ${r.isCorrect ? 'right' : 'wrong'}">
+    <p><strong>${n + 1}. ${inline(r.prompt)}</strong> <span class="pill ${r.isCorrect ? 'public' : ''}">${r.isCorrect ? 'Correct' : 'Not quite'}</span></p>
+    <ul class="reveal-options">${r.options.map((o) => html`<li class="${o.correct ? 'is-correct' : ''} ${o.chosen ? 'is-chosen' : ''}">${o.chosen ? '● ' : '○ '}${inline(o.text)}${o.correct ? html` <span class="muted small">correct answer</span>` : ''}</li>`)}</ul>
+    ${r.explanation ? html`<p class="hint">${inline(r.explanation)}</p>` : ''}
+  </div>`
+        )}`
+      : ''}
+  ${view.isLatest && (owner || remaining === null || remaining > 0) ? html`<p><a class="btn secondary" href="/a/${artifact.id}"><span>${owner ? 'Try it again' : 'Try again'}</span></a></p>` : ''}`
+      : !view.isLatest
+        ? html`<p class="banner-inline">This is an older version. Open the latest version to take the quiz.</p>`
+        : !owner && remaining !== null && remaining <= 0
+          ? html`<h2>You've used all your attempts</h2><p class="lede">Your most recent result is below.</p>`
+          : form}
+  ${past.length
+      ? html`<h2>Your attempts</h2><table class="list"><thead><tr><th>#</th><th>Score</th><th></th><th class="num">When</th></tr></thead><tbody>${past.map(
+            (a) => html`<tr><td>${a.attempt_no}${a.preview ? ' (preview)' : ''}</td><td>${a.percent}% <span class="muted small">${a.points}/${a.max_points}</span></td><td>${a.passed ? html`<span class="pill public">Passed</span>` : html`<span class="pill">Not passed</span>`}</td><td class="num">${relativeTime(a.created_at)}</td></tr>`
+        )}</tbody></table>`
+      : ''}
+</div></main>`
+}
+
+export interface QuizResultsView {
+    artifact: Artifact
+    version: number
+    versions: { version: number; n: number }[]
+    questions: QuizQuestion[]
+    stats: QuestionStats[]
+    attempts: QuizAttempt[]
+}
+
+export function quizResultsPage({ user, view }: { user: User | null; view: QuizResultsView }) {
+    const { artifact, version, versions, questions, stats, attempts } = view
+    const passed = attempts.filter((a) => a.passed).length
+    const people = new Set(attempts.map((a) => `${a.taker_kind}:${a.taker_id}`)).size
+    const avg = attempts.length ? Math.round(attempts.reduce((n, a) => n + a.percent, 0) / attempts.length) : null
+    return layout({
+        title: `Results · ${artifact.title} · PostHog Artifacts`,
+        body: html`${appBar({ user, next: `/a/${artifact.id}/results`, center: html`<h1>${artifact.title}</h1><span class="meta">Quiz results</span>`, actions: html`<a class="btn secondary" href="/a/${artifact.id}"><span>Back to quiz</span></a>` })}
+<main class="page">
+  <h1>Results</h1>
+  <p class="lede">Version ${version}. Your own previews aren't counted.${versions.length > 1 ? html` Other versions: ${versions.filter((v) => v.version !== version).map((v) => html`<a href="/a/${artifact.id}/results?v=${v.version}">v${v.version} (${v.n})</a> `)}` : ''}</p>
+  ${attempts.length
+      ? html`<div class="card quiz-summary"><div><strong>${attempts.length}</strong><span class="muted small"> ${attempts.length === 1 ? 'attempt' : 'attempts'}</span></div><div><strong>${people}</strong><span class="muted small"> ${people === 1 ? 'person' : 'people'}</span></div><div><strong>${Math.round((passed * 100) / attempts.length)}%</strong><span class="muted small"> passed</span></div><div><strong>${avg}%</strong><span class="muted small"> average</span></div></div>
+  <h2>By question</h2>
+  ${questions.map(
+      (q, n) => html`<div class="card quiz-stat"><p><strong>${n + 1}. ${inline(q.prompt)}</strong></p>
+    <p class="muted small">${stats[n]!.answered ? `${Math.round((stats[n]!.correct * 100) / stats[n]!.answered)}% got it right` : 'Not answered yet'} · ${stats[n]!.answered} answered</p>
+    <ul class="reveal-options">${q.options.map((o) => html`<li class="${q.correct.includes(o.id) ? 'is-correct' : ''}">${inline(o.text)} <span class="muted small">${stats[n]!.picks[o.id] ?? 0} picked${q.correct.includes(o.id) ? ' · correct' : ''}</span></li>`)}</ul></div>`
+  )}
+  <h2>Attempts</h2>
+  <div class="card flush"><table class="list"><thead><tr><th>Who</th><th>Attempt</th><th>Score</th><th></th><th class="num">When</th></tr></thead><tbody>
+  ${attempts.map(
+      (a) => html`<tr><td>${a.taker_kind === 'anonymous' ? html`${a.taker_name || 'Anonymous'} <span class="muted small">signed out</span>` : html`${a.taker_name}${a.taker_name !== a.taker_id ? html` <span class="muted small">${a.taker_id}</span>` : ''}${a.taker_kind === 'staff' ? html` <span class="muted small">PostHog</span>` : ''}`}</td><td>${a.attempt_no}</td><td>${a.percent}% <span class="muted small">${a.points}/${a.max_points}</span></td><td>${a.passed ? html`<span class="pill public">Passed</span>` : html`<span class="pill">Not passed</span>`}</td><td class="num">${relativeTime(a.created_at)}</td></tr>`
+  )}</tbody></table></div>`
+      : html`<div class="card"><div class="empty">No attempts on this version yet.</div></div>`}
+</main>`,
+    })
+}
+
 interface ViewerOptions {
+    quiz: QuizView | null
     comments: CommentsView | null
     user: User | null
     /** Email of an invited viewer (not a PostHog user), when that's how this page is being viewed. */
@@ -181,7 +317,7 @@ interface ViewerOptions {
     shareUrl: string
 }
 
-export function viewerPage({ comments, user, guest, invites, artifact, versions, version, owner, frameSrc, shareUrl }: ViewerOptions) {
+export function viewerPage({ quiz, comments, user, guest, invites, artifact, versions, version, owner, frameSrc, shareUrl }: ViewerOptions) {
     const isLatest = version.version === artifact.latest_version
     const author = artifact.owner_name ?? artifact.owner_email
 
@@ -256,9 +392,11 @@ export function viewerPage({ comments, user, guest, invites, artifact, versions,
     </div>
   </details>`
 
-    const actions = html`<button class="ghost hide-sm" type="button" data-fullscreen title="Full screen">${expandIcon}</button>
+    // A quiz is the page itself, not an iframe: no full screen, and its source is the answer key, so only its owner can hand it to an agent.
+    const actions = html`${quiz ? '' : html`<button class="ghost hide-sm" type="button" data-fullscreen title="Full screen">${expandIcon}</button>`}
+  ${quiz && owner ? html`<a class="btn secondary" href="/a/${artifact.id}/results"><span>Results</span></a>` : ''}
   ${comments ? commentsPanel(artifact, comments) : ''}
-  ${handover}
+  ${quiz && !owner ? '' : handover}
   ${share}`
 
     return layout({
@@ -281,7 +419,9 @@ ${appBar({
 ${!isLatest
     ? html`<div class="banner">You're viewing version ${version.version}. People you share with only see the latest. <a href="/a/${artifact.id}">View latest (v${artifact.latest_version})</a></div>`
     : ''}
-<iframe src="${frameSrc}" title="${artifact.title}" ${version.format === 'slides' ? raw('data-autofocus') : ''} sandbox="${SANDBOX}" allow="clipboard-write; fullscreen" referrerpolicy="no-referrer"></iframe>
+${quiz
+    ? quizBody(artifact, quiz)
+    : html`<iframe src="${frameSrc}" title="${artifact.title}" ${version.format === 'slides' ? raw('data-autofocus') : ''} sandbox="${SANDBOX}" allow="clipboard-write; fullscreen" referrerpolicy="no-referrer"></iframe>`}
 </div>
 <div class="toast" role="status" aria-live="polite"></div>
 <script src="/viewer.js" defer></script>`,

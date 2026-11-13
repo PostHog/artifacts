@@ -8,11 +8,13 @@ import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/poli
 import { type Guest, clearGuestCookie, getGuest, getGuestIdentity, guestCookie, normalizeEmail } from '../lib/guest'
 import { LoginError, beginPostHogLogin, clientMetadata, finishPostHogLogin, loginErrorMessage } from '../lib/posthog-oauth'
 import { clearSessionCookie, getUser, isAllowedEmail, isLocal, isRevoked, safeNext, serializeCookie, sessionCookie } from '../lib/session'
-import { type Commenter, StoreError, addComment, cleanAnchor, deleteComment, getArtifact, getVersion, isInvited, isOwner, listArtifacts, listComments, listInvites, listVersions, setCommentsEnabled, setVisibility, shareUrl } from '../store'
+import { type Commenter, StoreError, addComment, cleanAnchor, deleteComment, getArtifact, getContent, getVersion, isInvited, isOwner, listArtifacts, listComments, listInvites, listVersions, setCommentsEnabled, setVisibility, shareUrl } from '../store'
 import { type AgentTarget, type FrameAccess, agentContentUrl, contentOrigin, frameUrl, serveAgentContent, serveContent } from './content'
 import { claudeCodeLink, codexLink, handoverPrompt } from './handover'
-import type { CommentsView } from './templates'
-import { consentPage, guestGatePage, homePage, loginPage, messagePage, viewerPage } from './templates'
+import { QuizError, parseAnswers, parseQuiz, publicQuiz, questionStats, scoreQuiz } from '../lib/quiz'
+import { MAX_ATTEMPTS_PER_ARTIFACT, type Taker, attemptVersions, countAttempts, countTakerAttempts, getAttempt, listAttempts, listTakerAttempts, parseStoredAnswers, recordAttempt } from '../quiz-store'
+import type { CommentsView, QuizReveal, QuizView } from './templates'
+import { consentPage, guestGatePage, homePage, loginPage, messagePage, quizErrorMessage, quizResultsPage, viewerPage } from './templates'
 
 type Env = { Bindings: AppEnv; Variables: { user: User | null } }
 
@@ -316,6 +318,144 @@ async function viewerActor(c: Context<Env>, view: Extract<ViewAccess, { ok: true
     return { kind: 'anonymous', id: anon.id }
 }
 
+// --- Quizzes ------------------------------------------------------------------------
+
+/** Who is taking the quiz, as stored on the attempt. The ID is never the hashed analytics one: owners see who took it. */
+function takerFrom(c: Context<Env>, view: Extract<ViewAccess, { ok: true }>, actor: ViewerActor, typedName = ''): Taker {
+    if (actor.kind === 'anonymous') return { kind: 'anonymous', id: actor.id, name: typedName.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 60) }
+    if (actor.kind === 'guest') return { kind: 'guest', id: (view.guest ?? '').toLowerCase(), name: view.guest ?? '' }
+    // Staff, including staff let in through an invite list.
+    const email = (c.get('user')?.email ?? view.guestIdentity?.email ?? '').toLowerCase()
+    return { kind: 'staff', id: email, name: c.get('user')?.name ?? email }
+}
+
+async function loadQuiz(c: Context<Env>, artifactId: string, version: number) {
+    const row = await getVersion(c.env, artifactId, version)
+    if (!row || row.format !== 'quiz') return null
+    const text = await getContent(c.env, row)
+    if (text == null) return null
+    try {
+        return parseQuiz(text)
+    } catch (error) {
+        if (error instanceof QuizError) return null
+        throw error
+    }
+}
+
+async function buildQuizView(c: Context<Env>, view: Extract<ViewAccess, { ok: true }>, version: { version: number }, actor: ViewerActor): Promise<QuizView> {
+    const { artifact, owner } = view
+    const quiz = (await loadQuiz(c, artifact.id, version.version)) ?? { questions: [], pass_mark: 0, attempts: null, show_answers: false }
+    const taker = takerFrom(c, view, actor)
+    const attempts = await listTakerAttempts(c.env, artifact.id, taker)
+    const isLatest = version.version === artifact.latest_version
+    const used = attempts.filter((a) => a.version === version.version && !a.preview).length
+    const remaining = owner || quiz.attempts === null ? null : Math.max(0, quiz.attempts - used)
+
+    // The result of a submission: only the person who made it, or the owner, may see it.
+    let result: QuizView['result']
+    const wanted = c.req.query('attempt')
+    const attempt = wanted ? await getAttempt(c.env, artifact.id, wanted) : null
+    if (attempt && (owner || (attempt.taker_kind === taker.kind && attempt.taker_id === taker.id))) {
+        let reveal: QuizReveal[] | null = null
+        const taken = attempt.version === version.version ? quiz : await loadQuiz(c, artifact.id, attempt.version)
+        if (taken && taken.show_answers) {
+            const answers = parseStoredAnswers(attempt)
+            const score = scoreQuiz(taken, answers)
+            reveal = taken.questions.map((q, n) => ({
+                id: q.id,
+                prompt: q.prompt,
+                explanation: q.explanation,
+                isCorrect: score.questions[n]!.correct,
+                options: q.options.map((o) => ({ id: o.id, text: o.text, chosen: (answers[q.id] ?? []).includes(o.id), correct: q.correct.includes(o.id) })),
+            }))
+        }
+        result = { attempt, reveal }
+    }
+    return {
+        quiz: publicQuiz(quiz as Parameters<typeof publicQuiz>[0]),
+        needsName: taker.kind === 'anonymous',
+        isLatest,
+        owner,
+        remaining,
+        attempts,
+        result,
+        error: quizErrorMessage(c.req.query('qerr')),
+    }
+}
+
+app.post('/a/:id/quiz', async (c) => {
+    if (!sameOrigin(c)) return c.text('Forbidden', 403)
+    const view = await viewAccess(c, c.req.param('id'))
+    if (!view.ok) return c.text('Not found', 404)
+    const { artifact, owner } = view
+    const back = (error?: string) => c.redirect(`/a/${artifact.id}${error ? `?qerr=${error}` : ''}`)
+    const quiz = await loadQuiz(c, artifact.id, artifact.latest_version)
+    if (!quiz) return notFound(c)
+
+    const form = await c.req.formData()
+    if (Number(form.get('v')) !== artifact.latest_version) return back('stale')
+    const actor = await viewerActor(c, view, true)
+    const taker = takerFrom(c, view, actor, String(form.get('taker_name') ?? ''))
+
+    // Per person, and per address for signed-out takers, who are otherwise whoever clears their cookies.
+    const keys = [`${taker.kind}:${taker.id}`, ...(taker.kind === 'anonymous' ? [`ip:${c.req.header('CF-Connecting-IP') ?? 'unknown'}`] : [])]
+    const limits = await Promise.all(keys.map((key) => c.env.QUIZ_LIMITER.limit({ key })))
+    if (limits.some((l) => !l.success)) return back('slow')
+
+    if (!owner) {
+        if (quiz.attempts !== null && (await countTakerAttempts(c.env, artifact.id, artifact.latest_version, taker)) >= quiz.attempts) return back('limit')
+        if ((await countAttempts(c.env, artifact.id)) >= MAX_ATTEMPTS_PER_ARTIFACT) return back('full')
+    }
+
+    // Only what the form can produce: q_<question id> fields holding option ids. Anything else is refused.
+    const raw: Record<string, string[]> = {}
+    for (const key of new Set(form.keys())) if (key.startsWith('q_')) raw[key.slice(2)] = form.getAll(key).map(String)
+    let score
+    let answers
+    try {
+        answers = parseAnswers(quiz, raw)
+        score = scoreQuiz(quiz, answers)
+    } catch (error) {
+        if (error instanceof QuizError) return back('invalid')
+        throw error
+    }
+    let attempt
+    try {
+        attempt = await recordAttempt(c.env, { artifactId: artifact.id, version: artifact.latest_version, taker, score, answers, preview: owner })
+    } catch (error) {
+        if (error instanceof StoreError && error.code === 'conflict') return back('again')
+        throw error
+    }
+    track(c.env, c.executionCtx, 'quiz submitted', actor, {
+        artifact_id: artifact.id,
+        artifact_owner: artifact.owner_email,
+        version: attempt.version,
+        attempt_no: attempt.attempt_no,
+        points: score.points,
+        max_points: score.max,
+        percent: score.percent,
+        passed: score.passed,
+        is_preview: owner,
+        access: view.access,
+    }, c.req.raw)
+    return c.redirect(`/a/${artifact.id}?attempt=${attempt.id}`)
+})
+
+// The owner's view of how people did. Names and emails are in it, so it is the owner's only.
+app.get('/a/:id/results', async (c) => {
+    const user = c.get('user')
+    const artifact = await getArtifact(c.env, c.req.param('id'))
+    if (!artifact) return user ? notFound(c) : loginRedirect(c)
+    if (!isOwner(artifact, user)) return user ? notFound(c) : loginRedirect(c)
+    const versions = await attemptVersions(c.env, artifact.id)
+    const requested = Number(c.req.query('v') ?? versions[0]?.version ?? artifact.latest_version)
+    const quiz = Number.isInteger(requested) ? await loadQuiz(c, artifact.id, requested) : null
+    if (!quiz) return notFound(c)
+    const attempts = await listAttempts(c.env, artifact.id, requested)
+    c.header('Cache-Control', 'private, no-store')
+    return c.html(quizResultsPage({ user, view: { artifact, version: requested, versions, questions: quiz.questions, stats: questionStats(quiz, attempts.map(parseStoredAnswers)), attempts } }))
+})
+
 app.get('/a/:id', async (c) => {
     const user = c.get('user')
     const view = await viewAccess(c, c.req.param('id'))
@@ -369,8 +509,13 @@ app.get('/a/:id', async (c) => {
         c.req.raw
     )
 
+    // A quiz is rendered here, by us, from its definition: the answer key never goes to the browser, and there is no iframe.
+    let quizView: QuizView | null = null
+    if (version.format === 'quiz') quizView = await buildQuizView(c, view, version, actor)
+
     return c.html(
         viewerPage({
+            quiz: quizView,
             user,
             guest,
             artifact,
@@ -379,7 +524,7 @@ app.get('/a/:id', async (c) => {
             comments: commentsView,
             version,
             owner,
-            frameSrc: await frameUrl(c.env, artifact.id, version.version, access, guest ?? undefined, !!commentsView?.enabled && version.version === artifact.latest_version),
+            frameSrc: quizView ? '' : await frameUrl(c.env, artifact.id, version.version, access, guest ?? undefined, !!commentsView?.enabled && version.version === artifact.latest_version),
             shareUrl: shareUrl(c.env, artifact.id),
         })
     )
@@ -400,6 +545,8 @@ app.post('/a/:id/handover', async (c) => {
     const requested = owner && Number.isInteger(body.v) ? (body.v as number) : artifact.latest_version
     const version = await getVersion(c.env, artifact.id, requested)
     if (!version) return c.text('Not found', 404)
+    // A quiz's source is its answer key: only its owner can hand it over.
+    if (version.format === 'quiz' && !owner) return c.text('Not found', 404)
     const { distinctId, viewerType } = actorIdentity(await viewerActor(c, view, false))
     const prompt = async (to: AgentTarget) =>
         handoverPrompt({
