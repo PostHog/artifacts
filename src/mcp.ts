@@ -4,6 +4,7 @@ import type { PostHog } from 'posthog-node'
 import { createMcpHandler } from 'agents/mcp/server'
 import { z } from 'zod'
 import type { AppEnv, User } from './env'
+import { BRAND_GUIDELINES, applyBrand, isBranded } from './lib/brand'
 import { APP, analyticsClient, clientIp, staffDistinctId, track } from './lib/analytics'
 import { isAllowedEmail, isRevoked, toUser } from './lib/session'
 import {
@@ -260,6 +261,39 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
                 source: 'mcp',
             })
             return describe(env, artifact)
+        })
+    )
+
+    server.registerTool(
+        'brand_artifact',
+        {
+            title: 'Apply PostHog branding',
+            description:
+                'Make an artifact you own follow the PostHog brandbook (brand.posthog.com). For an html or slides artifact, publishes a new version of the latest one with the RoundHog typeface and the PostHog colour variables added, and returns the brand guidelines (palette, logo files, illustrations) so you can finish the job by editing the content and publishing again. Markdown artifacts already render in PostHog typography, so for those it changes nothing and only returns the guidelines. Pass the artifact you are working on. Visibility is unchanged.',
+            inputSchema: z.object({ artifact_id: artifactId }),
+            annotations: { destructiveHint: false, idempotentHint: true },
+        },
+        guarded(async ({ artifact_id }) => {
+            const artifact = await getOwnedArtifact(env, artifact_id, user)
+            const latest = await getVersion(env, artifact.id, artifact.latest_version)
+            const content = latest && (await getContent(env, latest))
+            if (!latest || content == null) throw new StoreError('not_found', 'The latest version has no content')
+            if (latest.format === 'markdown') {
+                return { ...describe(env, artifact), applied: false, reason: 'Markdown artifacts already render in PostHog typography. To use the full brand, publish it as html.', guidelines: BRAND_GUIDELINES }
+            }
+            if (isBranded(content)) {
+                return { ...describe(env, artifact), applied: false, reason: 'The latest version already has the brand layer.', guidelines: BRAND_GUIDELINES }
+            }
+            const { success } = await env.PUBLISH_LIMITER.limit({ key: user.email })
+            if (!success) throw new StoreError('invalid', 'Too many publishes in the last minute; wait a moment and retry')
+            const { artifact: updated, version } = await publish(env, user, {
+                artifactId: artifact.id,
+                content: applyBrand(content),
+                format: latest.format,
+                note: 'Applied PostHog brand layer (RoundHog typeface, brand colours)',
+            })
+            track(env, ctx, 'artifact branded', user, { artifact_id: artifact.id, version: version.version, format: version.format, source: 'mcp' })
+            return { ...describe(env, updated), applied: true, version: describeVersion(version), guidelines: BRAND_GUIDELINES }
         })
     )
 
