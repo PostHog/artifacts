@@ -29,8 +29,12 @@ export function applyBrand(html: string): string {
     if (isBranded(html)) return html
     const closeHead = /<\/head\s*>/i.exec(html)
     if (closeHead) return html.slice(0, closeHead.index) + LAYER + html.slice(closeHead.index)
-    const openHead = /<head(\s[^>]*)?>/i.exec(html)
-    if (openHead) return html.slice(0, openHead.index + openHead[0].length) + '\n' + LAYER + html.slice(openHead.index + openHead[0].length)
+    // Find the tag name, then its closing '>' once. A regex that spans the attributes ([^>]*) retries from every
+    // later '<head ' when the '>' is missing, which is quadratic on untrusted content. If this tag has no '>',
+    // no later one does either.
+    const openHead = /<head(?=[\s>])/i.exec(html)
+    const openHeadEnd = openHead ? html.indexOf('>', openHead.index) : -1
+    if (openHeadEnd !== -1) return html.slice(0, openHeadEnd + 1) + '\n' + LAYER + html.slice(openHeadEnd + 1)
     // No <head>: keep the layer after the doctype (anything before it triggers quirks mode) and any <html> tag.
     const prologue = /^\s*(<!doctype[^>]*>\s*)?(<html(\s[^>]*)?>\s*)?/i.exec(html)![0]
     return prologue + LAYER + html.slice(prologue.length)
