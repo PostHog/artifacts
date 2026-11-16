@@ -6,7 +6,7 @@
 
 ```
                        ┌───────────────── Cloudflare Worker (artifacts.posthog.com) ─────────────────┐
-Claude Code ── MCP ──▶ │ /mcp            OAuth-protected MCP server (6 tools)                        │
+Claude Code ── MCP ──▶ │ /mcp            OAuth-protected MCP server (8 tools)                        │
   (OAuth, DCR/CIMD)    │ /authorize      consent page → Sign in with PostHog (@posthog.com)       │
                        │ /oauth/*        token + client registration (workers-oauth-provider)        │
 Browser ─────────────▶ │ /a/:id          viewer: PostHog-branded chrome + sandboxed iframe           │
@@ -64,6 +64,7 @@ Each fills in a prompt without sending it. The prompt names the artifact and its
 | `get_artifact` | Metadata, version history, and optionally a version's content. |
 | `set_visibility` | `private`, `team`, `invited` (with `invited_emails`, which replaces the list) or `public`. |
 | `update_artifact` | Rename, change the description, or turn comments on or off (`comments_enabled`). |
+| `brand_artifact` | Make an artifact you own follow the [PostHog brandbook](https://brand.posthog.com/llms.txt): adds the RoundHog typeface and brand colour variables to the latest HTML or slides version (as a new version) and returns the palette, logo and illustration guidelines for the agent to finish with. |
 | `list_comments` | Comments on an artifact you own: author, email, staff or guest, version, text. |
 | `delete_artifact` | Permanent delete. |
 
