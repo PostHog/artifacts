@@ -6,7 +6,7 @@
 
 ```
                        ┌───────────────── Cloudflare Worker (artifacts.posthog.com) ─────────────────┐
-Claude Code ── MCP ──▶ │ /mcp            OAuth-protected MCP server (6 tools)                        │
+Claude Code ── MCP ──▶ │ /mcp            OAuth-protected MCP server (8 tools)                        │
   (OAuth, DCR/CIMD)    │ /authorize      consent page → Sign in with PostHog (@posthog.com)       │
                        │ /oauth/*        token + client registration (workers-oauth-provider)        │
 Browser ─────────────▶ │ /a/:id          viewer: PostHog-branded chrome + sandboxed iframe           │
@@ -91,6 +91,7 @@ Each fills in a prompt without sending it. The prompt names the artifact and its
 | `get_artifact` | Metadata, version history, and optionally a version's content. |
 | `set_visibility` | `private`, `team`, `invited` (with `invited_emails`, which replaces the list) or `public`. |
 | `update_artifact` | Rename, change the description, or turn comments on or off (`comments_enabled`). |
+| `brand_artifact` | Make an artifact you own follow the [PostHog brandbook](https://brand.posthog.com/llms.txt): adds the RoundHog typeface and brand colour variables to the latest HTML or slides version (as a new version) and returns the palette, logo and illustration guidelines for the agent to finish with. |
 | `list_comments` | Comments on an artifact you own: author, email, staff or guest, version, text. |
 | `delete_artifact` | Permanent delete. |
 
@@ -161,7 +162,7 @@ Server-side events go to [project 2](https://us.posthog.com/project/2) via `post
 | `artifact visibility changed` | `set_visibility` or the Share button | `artifact_id`, `visibility`, `source` |
 | `artifact details updated` | `update_artifact` | `artifact_id`, `is_title_changed`, `is_description_changed` |
 | `artifact deleted` | `delete_artifact` | `artifact_id` |
-| `artifact viewed` | viewer page loads, once access is granted | `artifact_id`, `artifact_owner`, `version`, `access`, `viewer_type` |
+| `artifact viewed` | viewer page loads, once access is granted | `artifact_id`, `artifact_owner`, `author_name`, `artifact_title`, `is_owner`, `version`, `access`, `viewer_type` |
 | `artifact sent to agent` | an agent downloads a handover link | `artifact_id`, `version`, `format`, `access`, `target` (`claude_code`, `codex`, `copy`) |
 | `$mcp_tool_call` | every MCP tool call, via [MCP Analytics](https://posthog.com/docs/mcp-analytics/installation/typescript) (`@posthog/mcp`) | `$mcp_tool_name`, `$mcp_is_error`, `$mcp_duration_ms`, `$mcp_intent` |
 | `artifacts mcp client connected` | MCP OAuth completes | `client_id`, `is_consent_remembered` |

@@ -8,6 +8,7 @@ export type AnalyticsEvent =
     | 'artifact published'
     | 'artifact visibility changed'
     | 'artifact details updated'
+    | 'artifact branded'
     | 'artifact deleted'
     | 'artifact viewed'
     | 'artifact sent to agent'
