@@ -153,7 +153,8 @@ export function parseAnswers(quiz: Quiz, raw: Record<string, string[]>): Answers
     for (const [qid, picked] of Object.entries(raw)) {
         const q = byId.get(qid)
         if (!q) throw new QuizError('Invalid submission')
-        const chosen = [...new Set(picked)]
+        if (new Set(picked).size !== picked.length) throw new QuizError('Invalid submission')
+        const chosen = picked
         if (chosen.length === 0) continue
         if (q.type !== 'multi' && chosen.length > 1) throw new QuizError('Invalid submission')
         if (!chosen.every((c) => q.options.some((o) => o.id === c))) throw new QuizError('Invalid submission')

@@ -53,7 +53,7 @@ A `quiz` artifact is questions people answer and get scored on. Unlike every oth
 - **Taking it:** the viewer page shows the questions, a submission is scored and stored, and the result is the score and pass or fail against `pass_mark` (default 70%). Correct answers and explanations are only shown on the result when the author sets `show_answers`, because otherwise a retake could copy the key. `attempts` is per person per version (default 1, `null` for unlimited), and a new version is a new quiz with its own attempts.
 - **Who can take it:** staff on team quizzes, invited guests on invited ones (recorded by email), and anyone with the link on public ones (recorded by an anonymous browser ID, with an optional typed name). The owner can try their own quiz: it's scored but marked a preview, never counted or limited.
 - **Results:** the owner gets a **Results** page and a `quiz_results` MCP tool: every counted attempt (who, score, pass or fail, when) and, per question, how many answered, how many got it right and how often each option was picked. Results are per version.
-- **For training, not exams:** there's no timer, proctoring or anti-cheat, and signed-out takers are whoever clears their cookies. The only guard is a rate limit and a ceiling of 5,000 attempts per quiz.
+- **For training, not exams:** there's no timer, proctoring or anti-cheat, and signed-out takers are whoever clears their cookies. The only guards are a rate limit and a ceiling of counted attempts per version (1,000 from signed-out takers, 5,000 from signed-in ones).
 - Passage comments don't apply to quizzes (they need the iframe); whole-artifact comments do.
 
 ### Comments

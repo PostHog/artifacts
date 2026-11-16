@@ -7,7 +7,7 @@ export type TakerKind = 'staff' | 'guest' | 'anonymous'
 
 export interface Taker {
     kind: TakerKind
-    /** Lowercased email for staff and guests, the anonymous browser ID for signed-out takers. */
+    /** Lowercased email for staff and guests, a keyed hash of the anonymous browser ID for signed-out takers. */
     id: string
     name: string
 }
@@ -30,54 +30,62 @@ export interface QuizAttempt {
     created_at: number
 }
 
-/** A ceiling on what signed-out takers of a public quiz can write into one artifact. */
-export const MAX_ATTEMPTS_PER_ARTIFACT = 5000
+/**
+ * Ceilings on counted attempts per version, so one artifact's table can't be filled from outside. Signed-out
+ * takers have their own, lower ceiling: they can be anyone, so they must not be able to use up the room
+ * that signed-in people need.
+ */
+export const MAX_ATTEMPTS_PER_VERSION: Record<TakerKind, number> = { anonymous: 1000, guest: 5000, staff: 5000 }
 
-export async function countAttempts(env: AppEnv, artifactId: string): Promise<number> {
-    return (await env.DB.prepare('SELECT COUNT(*) AS n FROM quiz_attempts WHERE artifact_id = ? AND preview = 0').bind(artifactId).first<{ n: number }>())?.n ?? 0
-}
-
-/** Attempts that count against this person's limit on this version. The owner's previews never do. */
-export async function countTakerAttempts(env: AppEnv, artifactId: string, version: number, taker: Taker): Promise<number> {
-    return (
-        (
-            await env.DB.prepare(
-                'SELECT COUNT(*) AS n FROM quiz_attempts WHERE artifact_id = ? AND version = ? AND taker_kind = ? AND taker_id = ? AND preview = 0'
-            )
-                .bind(artifactId, version, taker.kind, taker.id)
-                .first<{ n: number }>()
-        )?.n ?? 0
-    )
-}
+export type RecordResult = { ok: true; attempt: QuizAttempt } | { ok: false; reason: 'limit' | 'full' }
 
 /**
- * Stores one submission. The next attempt number is worked out in the same statement that inserts it, and the
- * table's unique key makes a second submission that raced for the same number fail instead of slipping past a limit.
+ * Stores one submission, or says why not. The person's limit and the version's ceiling are checked inside the
+ * same INSERT ... SELECT that numbers the attempt, so two submissions sent at once can't both slip under a
+ * limit that a separate count-then-insert would let through. No row written means a limit was reached.
+ * The owner's previews skip both limits and are never counted.
  */
 export async function recordAttempt(
     env: AppEnv,
-    input: { artifactId: string; version: number; taker: Taker; score: Score; answers: Answers; preview: boolean }
-): Promise<QuizAttempt> {
+    input: { artifactId: string; version: number; taker: Taker; score: Score; answers: Answers; preview: boolean; maxPerTaker: number | null }
+): Promise<RecordResult> {
     const id = randomId()
     const now = Date.now()
+    const { artifactId, version, taker } = input
+    let changes = 0
     try {
-        await env.DB.prepare(
+        const run = await env.DB.prepare(
             `INSERT INTO quiz_attempts (id, artifact_id, version, taker_kind, taker_id, taker_name, attempt_no, points, max_points, percent, passed, answers, preview, created_at)
-             VALUES (?, ?, ?, ?, ?, ?,
-               (SELECT COALESCE(MAX(attempt_no), 0) + 1 FROM quiz_attempts WHERE artifact_id = ? AND version = ? AND taker_kind = ? AND taker_id = ?),
-               ?, ?, ?, ?, ?, ?, ?)`
+             SELECT ?, ?, ?, ?, ?, ?, COALESCE(MAX(attempt_no), 0) + 1, ?, ?, ?, ?, ?, ?, ?
+             FROM quiz_attempts WHERE artifact_id = ? AND version = ? AND taker_kind = ? AND taker_id = ?
+             HAVING ? = 1 OR (
+               (? IS NULL OR COALESCE(SUM(preview = 0), 0) < ?)
+               AND (SELECT COUNT(*) FROM quiz_attempts WHERE artifact_id = ? AND version = ? AND taker_kind = ? AND preview = 0) < ?
+             )`
         )
             .bind(
-                id, input.artifactId, input.version, input.taker.kind, input.taker.id, input.taker.name,
-                input.artifactId, input.version, input.taker.kind, input.taker.id,
-                input.score.points, input.score.max, input.score.percent, input.score.passed ? 1 : 0, JSON.stringify(input.answers), input.preview ? 1 : 0, now
+                id, artifactId, version, taker.kind, taker.id, taker.name,
+                input.score.points, input.score.max, input.score.percent, input.score.passed ? 1 : 0, JSON.stringify(input.answers), input.preview ? 1 : 0, now,
+                artifactId, version, taker.kind, taker.id,
+                input.preview ? 1 : 0,
+                input.maxPerTaker, input.maxPerTaker,
+                artifactId, version, taker.kind, MAX_ATTEMPTS_PER_VERSION[taker.kind]
             )
             .run()
+        changes = run.meta.changes
     } catch (error) {
         if (String(error).includes('UNIQUE')) throw new StoreError('conflict', 'That submission raced another one')
         throw error
     }
-    return (await getAttempt(env, input.artifactId, id))!
+    if (changes === 0) {
+        const mine = await env.DB.prepare(
+            'SELECT COUNT(*) AS n FROM quiz_attempts WHERE artifact_id = ? AND version = ? AND taker_kind = ? AND taker_id = ? AND preview = 0'
+        )
+            .bind(artifactId, version, taker.kind, taker.id)
+            .first<{ n: number }>()
+        return { ok: false, reason: input.maxPerTaker !== null && (mine?.n ?? 0) >= input.maxPerTaker ? 'limit' : 'full' }
+    }
+    return { ok: true, attempt: (await getAttempt(env, artifactId, id))! }
 }
 
 export async function getAttempt(env: AppEnv, artifactId: string, attemptId: string): Promise<QuizAttempt | null> {

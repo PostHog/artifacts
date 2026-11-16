@@ -3,7 +3,7 @@ import { Hono, type Context } from 'hono'
 import type { AppEnv, User } from '../env'
 import { type ViewerActor, type ViewerType, actorIdentity, anonymousId, guestAnalyticsId, track } from '../lib/analytics'
 import type { Artifact } from '../store'
-import { deriveSecret } from '../lib/crypto'
+import { deriveSecret, sign } from '../lib/crypto'
 import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/policy'
 import { type Guest, clearGuestCookie, getGuest, getGuestIdentity, guestCookie, normalizeEmail } from '../lib/guest'
 import { LoginError, beginPostHogLogin, clientMetadata, finishPostHogLogin, loginErrorMessage } from '../lib/posthog-oauth'
@@ -12,7 +12,7 @@ import { type Commenter, StoreError, addComment, cleanAnchor, deleteComment, get
 import { type AgentTarget, type FrameAccess, agentContentUrl, contentOrigin, frameUrl, serveAgentContent, serveContent } from './content'
 import { claudeCodeLink, codexLink, handoverPrompt } from './handover'
 import { QuizError, parseAnswers, parseQuiz, publicQuiz, questionStats, scoreQuiz } from '../lib/quiz'
-import { MAX_ATTEMPTS_PER_ARTIFACT, type Taker, attemptVersions, countAttempts, countTakerAttempts, getAttempt, listAttempts, listTakerAttempts, parseStoredAnswers, recordAttempt } from '../quiz-store'
+import { type Taker, attemptVersions, getAttempt, listAttempts, listTakerAttempts, parseStoredAnswers, recordAttempt } from '../quiz-store'
 import type { CommentsView, QuizReveal, QuizView } from './templates'
 import { consentPage, guestGatePage, homePage, loginPage, messagePage, quizErrorMessage, quizResultsPage, viewerPage } from './templates'
 
@@ -321,8 +321,9 @@ async function viewerActor(c: Context<Env>, view: Extract<ViewAccess, { ok: true
 // --- Quizzes ------------------------------------------------------------------------
 
 /** Who is taking the quiz, as stored on the attempt. The ID is never the hashed analytics one: owners see who took it. */
-function takerFrom(c: Context<Env>, view: Extract<ViewAccess, { ok: true }>, actor: ViewerActor, typedName = ''): Taker {
-    if (actor.kind === 'anonymous') return { kind: 'anonymous', id: actor.id, name: typedName.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 60) }
+async function takerFrom(c: Context<Env>, view: Extract<ViewAccess, { ok: true }>, actor: ViewerActor, typedName = ''): Promise<Taker> {
+    // The browser ID is also the analytics ID, so it isn't a secret. What identifies the person to the quiz is a keyed hash of it.
+    if (actor.kind === 'anonymous') return { kind: 'anonymous', id: `anon_${(await sign(c.env.SESSION_SECRET, `quiz.taker.anonymous.${actor.id}`)).slice(0, 32)}`, name: typedName.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 60) }
     if (actor.kind === 'guest') return { kind: 'guest', id: (view.guest ?? '').toLowerCase(), name: view.guest ?? '' }
     // Staff, including staff let in through an invite list.
     const email = (c.get('user')?.email ?? view.guestIdentity?.email ?? '').toLowerCase()
@@ -345,7 +346,7 @@ async function loadQuiz(c: Context<Env>, artifactId: string, version: number) {
 async function buildQuizView(c: Context<Env>, view: Extract<ViewAccess, { ok: true }>, version: { version: number }, actor: ViewerActor): Promise<QuizView> {
     const { artifact, owner } = view
     const quiz = (await loadQuiz(c, artifact.id, version.version)) ?? { questions: [], pass_mark: 0, attempts: null, show_answers: false }
-    const taker = takerFrom(c, view, actor)
+    const taker = await takerFrom(c, view, actor)
     const attempts = await listTakerAttempts(c.env, artifact.id, taker)
     const isLatest = version.version === artifact.latest_version
     const used = attempts.filter((a) => a.version === version.version && !a.preview).length
@@ -395,17 +396,12 @@ app.post('/a/:id/quiz', async (c) => {
     const form = await c.req.formData()
     if (Number(form.get('v')) !== artifact.latest_version) return back('stale')
     const actor = await viewerActor(c, view, true)
-    const taker = takerFrom(c, view, actor, String(form.get('taker_name') ?? ''))
+    const taker = await takerFrom(c, view, actor, String(form.get('taker_name') ?? ''))
 
     // Per person, and per address for signed-out takers, who are otherwise whoever clears their cookies.
     const keys = [`${taker.kind}:${taker.id}`, ...(taker.kind === 'anonymous' ? [`ip:${c.req.header('CF-Connecting-IP') ?? 'unknown'}`] : [])]
     const limits = await Promise.all(keys.map((key) => c.env.QUIZ_LIMITER.limit({ key })))
     if (limits.some((l) => !l.success)) return back('slow')
-
-    if (!owner) {
-        if (quiz.attempts !== null && (await countTakerAttempts(c.env, artifact.id, artifact.latest_version, taker)) >= quiz.attempts) return back('limit')
-        if ((await countAttempts(c.env, artifact.id)) >= MAX_ATTEMPTS_PER_ARTIFACT) return back('full')
-    }
 
     // Only what the form can produce: q_<question id> fields holding option ids. Anything else is refused.
     const raw: Record<string, string[]> = {}
@@ -419,13 +415,15 @@ app.post('/a/:id/quiz', async (c) => {
         if (error instanceof QuizError) return back('invalid')
         throw error
     }
-    let attempt
+    let recorded
     try {
-        attempt = await recordAttempt(c.env, { artifactId: artifact.id, version: artifact.latest_version, taker, score, answers, preview: owner })
+        recorded = await recordAttempt(c.env, { artifactId: artifact.id, version: artifact.latest_version, taker, score, answers, preview: owner, maxPerTaker: owner ? null : quiz.attempts })
     } catch (error) {
         if (error instanceof StoreError && error.code === 'conflict') return back('again')
         throw error
     }
+    if (!recorded.ok) return back(recorded.reason)
+    const attempt = recorded.attempt
     track(c.env, c.executionCtx, 'quiz submitted', actor, {
         artifact_id: artifact.id,
         artifact_owner: artifact.owner_email,

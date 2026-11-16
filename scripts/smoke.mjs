@@ -157,7 +157,7 @@ assert.equal(init.serverInfo.name, 'posthog-artifacts')
 const { tools } = await mcp('tools/list', {})
 assert.deepEqual(
     tools.map((t) => t.name).sort(),
-    ['delete_artifact', 'get_artifact', 'list_artifacts', 'list_comments', 'publish_artifact', 'quiz_results', 'set_visibility', 'update_artifact']
+    ['brand_artifact', 'delete_artifact', 'get_artifact', 'list_artifacts', 'list_comments', 'publish_artifact', 'quiz_results', 'set_visibility', 'update_artifact']
 )
 step(`MCP initialize + tools/list (${tools.length} tools)`)
 
@@ -706,6 +706,23 @@ res = await view(anon, attemptUrl)
 assert.equal(res.status, 302, 'a result is not readable signed out')
 step('quiz: attempts limit holds')
 
+// Submissions sent at the same moment can't all pass the limit: one attempt stored, however many raced.
+{
+    const racer = new Jar()
+    await request(racer, '/login/dev', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: BASE }, body: new URLSearchParams({ email: 'racer@posthog.com', next: '/' }) })
+    const burst = await Promise.all(Array.from({ length: 8 }, () => qzPost(racer, qz.id, 1, { q1: ['b'] })))
+    const reasons = burst.map((r) => /qerr=(\w+)/.exec(r.headers.get('Location') ?? '')?.[1] ?? 'stored')
+    const stored = reasons.filter((r) => r === 'stored').length
+    console.log('  burst outcomes:', reasons.join(','))
+    assert.equal(stored, 1, `a burst of simultaneous posts stores one attempt, got ${stored}`)
+    const rstats = await call('quiz_results', { artifact_id: qz.id })
+    assert.equal(rstats.results.filter((r) => r.who.email === 'racer@posthog.com').length, 1, 'and only one is recorded')
+    // A repeated choice is refused, as the docs say.
+    res = await qzPost(racer, qz.id, 1, { q1: ['a', 'a'] })
+    assert.match(res.headers.get('Location') ?? '', /qerr=invalid/, 'a repeated choice is refused')
+}
+step('quiz: simultaneous submissions respect the limit; repeats refused')
+
 // Failing, tampering, staleness and cross-site posts. A second staff member has their own single attempt.
 const staff2 = new Jar()
 await request(staff2, '/login/dev', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: BASE }, body: new URLSearchParams({ email: 'third@posthog.com', next: '/' }) })
@@ -733,14 +750,14 @@ assert.equal(res.status, 302, 'the owner is never limited')
 assert.equal((await view(other, `/a/${qz.id}/results`)).status, 404, 'results are the owner’s only')
 assert.equal((await view(anon, `/a/${qz.id}/results`)).status, 302)
 let qr = await (await view(owner, `/a/${qz.id}/results`)).text()
-assert.match(qr, /2<\/strong><span class="muted small"> attempts/, 'two counted attempts, not the owner previews')
-assert.match(qr, /50%/, 'pass rate')
+assert.match(qr, /3<\/strong><span class="muted small"> attempts/, 'three counted attempts, not the owner previews')
+assert.match(qr, /33%/, 'pass rate')
 assert.ok(qr.includes('third@posthog.com') && qr.includes('other@posthog.com'), 'the owner sees who took it, by email')
 const stats = await call('quiz_results', { artifact_id: qz.id })
-assert.equal(stats.attempts, 2)
-assert.equal(stats.pass_rate, 50)
+assert.equal(stats.attempts, 3)
+assert.equal(stats.pass_rate, 33)
 assert.equal(stats.questions[0].picks.a, 1)
-assert.equal(stats.questions[0].picks.b, 1)
+assert.equal(stats.questions[0].picks.b, 2)
 assert.ok(stats.results.every((r) => r.who.email))
 step('quiz: owner results (page and MCP); previews are not counted')
 
@@ -781,7 +798,7 @@ const qz2 = await call('publish_artifact', { artifact_id: qz.id, format: 'quiz',
 res = await qzPost(other, qz.id, 2, { q1: ['a'], q2: ['x', 'y'], q3: ['true'] })
 assert.equal(res.status, 302, 'a new version gives a new attempt')
 const v1stats = await call('quiz_results', { artifact_id: qz.id, version: 1 })
-assert.equal(v1stats.attempts, 2, 'version 1 results are kept')
+assert.equal(v1stats.attempts, 3, 'version 1 results are kept')
 // Switching format back to html on a new version works, and the old quiz stays out of the iframe.
 await call('delete_artifact', { artifact_id: qz.id })
 await call('delete_artifact', { artifact_id: rev.id })

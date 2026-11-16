@@ -73,7 +73,8 @@ test('submissions the form could not have produced are refused', () => {
     assert.throws(() => parseAnswers(q, { nope: ['a'] }), /Invalid submission/)
     assert.throws(() => parseAnswers(q, { q1: ['zzz'] }), /Invalid submission/)
     assert.throws(() => parseAnswers(q, { q1: ['a', 'b'] }), /Invalid submission/, 'two picks on a single question')
-    assert.deepEqual(parseAnswers(q, { q2: ['a', 'a', 'c'] }), { q2: ['a', 'c'] }, 'repeats collapse')
+    assert.throws(() => parseAnswers(q, { q2: ['a', 'a', 'c'] }), /Invalid submission/, 'a repeated choice is refused')
+    assert.throws(() => parseAnswers(q, { q1: ['a', 'a'] }), /Invalid submission/, 'repeats on a single question')
 })
 
 test('per-question stats count right answers and every pick', () => {
