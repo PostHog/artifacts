@@ -321,9 +321,14 @@ async function viewerActor(c: Context<Env>, view: Extract<ViewAccess, { ok: true
 // --- Quizzes ------------------------------------------------------------------------
 
 /** Who is taking the quiz, as stored on the attempt. The ID is never the hashed analytics one: owners see who took it. */
-async function takerFrom(c: Context<Env>, view: Extract<ViewAccess, { ok: true }>, actor: ViewerActor, typedName = ''): Promise<Taker> {
+const MAX_QUIZ_FORM_BYTES = 32 * 1024
+/** 50 questions at 10 options each, plus the version and name fields. */
+const MAX_QUIZ_FORM_FIELDS = 520
+const cleanTypedName = (name: string) => name.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 60)
+
+async function takerFrom(c: Context<Env>, view: Extract<ViewAccess, { ok: true }>, actor: ViewerActor): Promise<Taker> {
     // The browser ID is also the analytics ID, so it isn't a secret. What identifies the person to the quiz is a keyed hash of it.
-    if (actor.kind === 'anonymous') return { kind: 'anonymous', id: `anon_${(await sign(c.env.SESSION_SECRET, `quiz.taker.anonymous.${actor.id}`)).slice(0, 32)}`, name: typedName.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 60) }
+    if (actor.kind === 'anonymous') return { kind: 'anonymous', id: `anon_${(await sign(c.env.SESSION_SECRET, `quiz.taker.anonymous.${actor.id}`)).slice(0, 32)}`, name: '' }
     if (actor.kind === 'guest') return { kind: 'guest', id: (view.guest ?? '').toLowerCase(), name: view.guest ?? '' }
     // Staff, including staff let in through an invite list.
     const email = (c.get('user')?.email ?? view.guestIdentity?.email ?? '').toLowerCase()
@@ -356,7 +361,9 @@ async function buildQuizView(c: Context<Env>, view: Extract<ViewAccess, { ok: tr
     let result: QuizView['result']
     const wanted = c.req.query('attempt')
     const attempt = wanted ? await getAttempt(c.env, artifact.id, wanted) : null
-    if (attempt && (owner || (attempt.taker_kind === taker.kind && attempt.taker_id === taker.id))) {
+    // Only the owner can open a result from a version that is no longer the shared one: a replaced quiz's questions
+    // and explanations stop being available to takers when the owner publishes over it.
+    if (attempt && (owner || (attempt.version === version.version && attempt.taker_kind === taker.kind && attempt.taker_id === taker.id))) {
         let reveal: QuizReveal[] | null = null
         const taken = attempt.version === version.version ? quiz : await loadQuiz(c, artifact.id, attempt.version)
         if (taken && taken.show_answers) {
@@ -377,6 +384,8 @@ async function buildQuizView(c: Context<Env>, view: Extract<ViewAccess, { ok: tr
         needsName: taker.kind === 'anonymous',
         isLatest,
         owner,
+        // Points tell a signed-out taker which single answer was right, one retake at a time, so without show_answers they get pass or fail only.
+        hideScore: !owner && taker.kind === 'anonymous' && !quiz.show_answers,
         remaining,
         attempts,
         result,
@@ -393,19 +402,34 @@ app.post('/a/:id/quiz', async (c) => {
     const quiz = await loadQuiz(c, artifact.id, artifact.latest_version)
     if (!quiz) return notFound(c)
 
-    const form = await c.req.formData()
-    if (Number(form.get('v')) !== artifact.latest_version) return back('stale')
+    // Bound the work a public link can make us do before anything is parsed: a body size cap, then the rate limits,
+    // and only then the form itself.
+    const length = Number(c.req.header('Content-Length'))
+    if (!Number.isFinite(length) || length > MAX_QUIZ_FORM_BYTES) return c.text('Payload too large', 413)
     const actor = await viewerActor(c, view, true)
-    const taker = await takerFrom(c, view, actor, String(form.get('taker_name') ?? ''))
+    const taker = await takerFrom(c, view, actor)
 
     // Per person, and per address for signed-out takers, who are otherwise whoever clears their cookies.
     const keys = [`${taker.kind}:${taker.id}`, ...(taker.kind === 'anonymous' ? [`ip:${c.req.header('CF-Connecting-IP') ?? 'unknown'}`] : [])]
     const limits = await Promise.all(keys.map((key) => c.env.QUIZ_LIMITER.limit({ key })))
     if (limits.some((l) => !l.success)) return back('slow')
 
-    // Only what the form can produce: q_<question id> fields holding option ids. Anything else is refused.
+    const form = await c.req.formData()
+    if (Number(form.get('v')) !== artifact.latest_version) return back('stale')
+    if (taker.kind === 'anonymous') taker.name = cleanTypedName(String(form.get('taker_name') ?? ''))
+
+    // Only what the form can produce: q_<question id> fields holding option ids, read in one pass and refused at the
+    // first unknown question or when there are more fields than any quiz could need.
+    const known = new Set(quiz.questions.map((q) => q.id))
     const raw: Record<string, string[]> = {}
-    for (const key of new Set(form.keys())) if (key.startsWith('q_')) raw[key.slice(2)] = form.getAll(key).map(String)
+    let fields = 0
+    for (const [key, value] of form.entries()) {
+        if (++fields > MAX_QUIZ_FORM_FIELDS) return back('invalid')
+        if (!key.startsWith('q_')) continue
+        const qid = key.slice(2)
+        if (!known.has(qid)) return back('invalid')
+        ;(raw[qid] ??= []).push(String(value))
+    }
     let score
     let answers
     try {

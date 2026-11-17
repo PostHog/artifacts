@@ -793,6 +793,46 @@ assert.ok(gstats.results.some((r) => r.who.kind === 'guest' && r.who.email === '
 assert.ok(gstats.results.some((r) => r.who.kind === 'anonymous'), 'and anonymous takers by name only')
 step('quiz: public takers are anonymous, invited takers recorded, strangers refused')
 
+// An old result link stops working for takers once the quiz is replaced; the owner keeps it.
+{
+    const old = await call('publish_artifact', { title: 'Old key', format: 'quiz', content: JSON.stringify({ ...quizDef, show_answers: true, attempts: null }), visibility: 'team' })
+    res = await qzPost(other, old.id, 1, { q1: ['b'], q2: ['x'], q3: ['true'] })
+    const oldUrl = res.headers.get('Location')
+    assert.ok((await (await view(other, oldUrl)).text()).includes(KEY), 'the result opens while its version is current')
+    await call('publish_artifact', { artifact_id: old.id, format: 'quiz', content: JSON.stringify({ ...quizDef, show_answers: true, attempts: null }), note: 'v2' })
+    assert.ok(!(await (await view(other, oldUrl)).text()).includes(KEY), 'a replaced version’s questions and key are gone for the taker')
+    assert.ok((await (await view(owner, oldUrl)).text()).includes(KEY), 'but the owner can still open it')
+    await call('delete_artifact', { artifact_id: old.id })
+}
+step('quiz: a replaced version’s result link stops revealing it to takers')
+
+// Signed-out takers of a quiz that doesn't reveal answers get pass or fail, never points; bad forms are cut off early.
+{
+    const hid = await call('publish_artifact', { title: 'Hidden', format: 'quiz', content: JSON.stringify({ ...quizDef, show_answers: false, attempts: null }), visibility: 'public' })
+    const fresh = new Jar()
+    await view(fresh, `/a/${hid.id}`)
+    res = await qzPost(fresh, hid.id, 1, { q1: ['a'] })
+    const page = await (await view(fresh, res.headers.get('Location'))).text()
+    assert.ok(/Not passed|Passed/.test(page) && !/ of \d+ points/.test(page) && !page.includes('class="big"'), 'a signed-out taker sees no points')
+    res = await qzPost(fresh, hid.id, 1, { nope: ['a'] })
+    assert.match(res.headers.get('Location') ?? '', /qerr=invalid/, 'an unknown question is refused')
+    const huge = new URLSearchParams({ v: '1' })
+    for (let i = 0; i < 4000; i++) huge.append(`q_x${i}`, 'a')
+    res = await request(fresh, `/a/${hid.id}/quiz`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: BASE }, body: huge })
+    assert.equal(res.status, 413, 'an oversized form is refused before it is parsed')
+    // Signed-in takers still see their points.
+    await call('set_visibility', { artifact_id: hid.id, visibility: 'team' })
+    res = await qzPost(other, hid.id, 1, { q1: ['a'] })
+    assert.match(await (await view(other, res.headers.get('Location'))).text(), / of \d+ points/, 'a signed-in taker sees their points')
+    // Owner totals count everything, and the list puts signed-in people first.
+    const hs = await call('quiz_results', { artifact_id: hid.id, limit: 1 })
+    assert.equal(hs.attempts, 2, 'totals count every attempt, not the listed slice')
+    assert.equal(hs.shown, 1)
+    assert.notEqual(hs.results[0].who.kind, 'anonymous', 'signed-in people are listed first')
+    await call('delete_artifact', { artifact_id: hid.id })
+}
+step('quiz: signed-out takers see pass or fail only; oversized and unknown forms refused; totals cover all attempts')
+
 // A new version is a new quiz: attempts are per version, and results keep both.
 const qz2 = await call('publish_artifact', { artifact_id: qz.id, format: 'quiz', content: quizText, note: 'v2' })
 res = await qzPost(other, qz.id, 2, { q1: ['a'], q2: ['x', 'y'], q3: ['true'] })

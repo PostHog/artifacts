@@ -103,12 +103,17 @@ export async function listTakerAttempts(env: AppEnv, artifactId: string, taker: 
     return results
 }
 
-/** Everyone's counted attempts on one version, newest first, for the owner's results. */
-export async function listAttempts(env: AppEnv, artifactId: string, version: number, limit = 500): Promise<QuizAttempt[]> {
+/**
+ * Everyone's counted attempts on one version, for the owner's results: signed-in people first, then signed-out
+ * ones, newest first within each. All of them (the per-version ceilings bound this), so summary figures describe
+ * every attempt and a flood of signed-out ones can't push signed-in results out of view.
+ */
+export async function listAttempts(env: AppEnv, artifactId: string, version: number): Promise<QuizAttempt[]> {
     const { results } = await env.DB.prepare(
-        'SELECT * FROM quiz_attempts WHERE artifact_id = ? AND version = ? AND preview = 0 ORDER BY created_at DESC LIMIT ?'
+        `SELECT * FROM quiz_attempts WHERE artifact_id = ? AND version = ? AND preview = 0
+         ORDER BY (taker_kind = 'anonymous'), created_at DESC LIMIT ?`
     )
-        .bind(artifactId, version, Math.min(Math.max(limit, 1), 1000))
+        .bind(artifactId, version, Object.values(MAX_ATTEMPTS_PER_VERSION).reduce((a, b) => a + b, 0))
         .all<QuizAttempt>()
     return results
 }

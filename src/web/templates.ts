@@ -187,6 +187,8 @@ export interface QuizView {
     needsName: boolean
     isLatest: boolean
     owner: boolean
+    /** Signed-out takers of a quiz that doesn't reveal answers see pass or fail, not points. */
+    hideScore: boolean
     /** Attempts this person still has on this version: null is unlimited. */
     remaining: number | null
     /** This person's own attempts, newest first. */
@@ -206,11 +208,11 @@ const QUIZ_ERRORS: Record<string, string> = {
 }
 export const quizErrorMessage = (code: string | undefined) => (code && Object.hasOwn(QUIZ_ERRORS, code) ? QUIZ_ERRORS[code] : undefined)
 
-function scoreCard(attempt: QuizAttempt, passMark: number, preview: boolean) {
+function scoreCard(attempt: QuizAttempt, passMark: number, preview: boolean, hideScore: boolean) {
     return html`<div class="quiz-score ${attempt.passed ? 'pass' : 'fail'}">
-    <div class="big">${attempt.percent}%</div>
+    ${hideScore ? '' : html`<div class="big">${attempt.percent}%</div>`}
     <div><strong>${attempt.passed ? 'Passed' : 'Not passed'}</strong>
-      <div class="muted small">${attempt.points} of ${attempt.max_points} points · pass mark ${passMark}%${preview ? ' · your preview, not counted' : ''}</div></div>
+      <div class="muted small">${hideScore ? '' : html`${attempt.points} of ${attempt.max_points} points · `}pass mark ${passMark}%${preview ? ' · your preview, not counted' : ''}</div></div>
   </div>`
 }
 
@@ -239,7 +241,7 @@ function quizBody(artifact: Artifact, view: QuizView) {
   ${quiz.intro ? html`<p class="lede">${inline(quiz.intro)}</p>` : ''}
   ${view.error ? html`<p class="error">${view.error}</p>` : ''}
   ${result
-      ? html`${scoreCard(result.attempt, quiz.pass_mark, !!result.attempt.preview)}
+      ? html`${scoreCard(result.attempt, quiz.pass_mark, !!result.attempt.preview, view.hideScore)}
   ${result.reveal
       ? html`<h2>Your answers</h2>${result.reveal.map(
             (r, n) => html`<div class="quiz-q reveal ${r.isCorrect ? 'right' : 'wrong'}">
@@ -257,11 +259,13 @@ function quizBody(artifact: Artifact, view: QuizView) {
           : form}
   ${past.length
       ? html`<h2>Your attempts</h2><table class="list"><thead><tr><th>#</th><th>Score</th><th></th><th class="num">When</th></tr></thead><tbody>${past.map(
-            (a) => html`<tr><td>${a.attempt_no}${a.preview ? ' (preview)' : ''}</td><td>${a.percent}% <span class="muted small">${a.points}/${a.max_points}</span></td><td>${a.passed ? html`<span class="pill public">Passed</span>` : html`<span class="pill">Not passed</span>`}</td><td class="num">${relativeTime(a.created_at)}</td></tr>`
+            (a) => html`<tr><td>${a.attempt_no}${a.preview ? ' (preview)' : ''}</td><td>${view.hideScore ? '' : html`${a.percent}% <span class="muted small">${a.points}/${a.max_points}</span>`}</td><td>${a.passed ? html`<span class="pill public">Passed</span>` : html`<span class="pill">Not passed</span>`}</td><td class="num">${relativeTime(a.created_at)}</td></tr>`
         )}</tbody></table>`
       : ''}
 </div></main>`
 }
+
+const MAX_RESULT_ROWS = 500
 
 export interface QuizResultsView {
     artifact: Artifact
@@ -293,9 +297,10 @@ export function quizResultsPage({ user, view }: { user: User | null; view: QuizR
   )}
   <h2>Attempts</h2>
   <div class="card flush"><table class="list"><thead><tr><th>Who</th><th>Attempt</th><th>Score</th><th></th><th class="num">When</th></tr></thead><tbody>
-  ${attempts.map(
+  ${attempts.slice(0, MAX_RESULT_ROWS).map(
       (a) => html`<tr><td>${a.taker_kind === 'anonymous' ? html`${a.taker_name || 'Anonymous'} <span class="muted small">signed out</span>` : html`${a.taker_name}${a.taker_name !== a.taker_id ? html` <span class="muted small">${a.taker_id}</span>` : ''}${a.taker_kind === 'staff' ? html` <span class="muted small">PostHog</span>` : ''}`}</td><td>${a.attempt_no}</td><td>${a.percent}% <span class="muted small">${a.points}/${a.max_points}</span></td><td>${a.passed ? html`<span class="pill public">Passed</span>` : html`<span class="pill">Not passed</span>`}</td><td class="num">${relativeTime(a.created_at)}</td></tr>`
-  )}</tbody></table></div>`
+  )}</tbody></table></div>
+  ${attempts.length > MAX_RESULT_ROWS ? html`<p class="muted small">Showing ${MAX_RESULT_ROWS} of ${attempts.length} attempts, signed-in people first. The figures above count all of them.</p>` : ''}`
       : html`<div class="card"><div class="empty">No attempts on this version yet.</div></div>`}
 </main>`,
     })
