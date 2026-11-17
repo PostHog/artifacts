@@ -5,7 +5,7 @@ import type { User } from '../env'
 import type { PublicQuiz, QuestionStats, QuizQuestion } from '../lib/quiz'
 import type { QuizAttempt } from '../quiz-store'
 import type { Artifact, Comment, Commenter, Version } from '../store'
-import { SANDBOX } from './content'
+import { ROUNDHOG_STYLESHEET, SANDBOX } from './content'
 
 type Html = HtmlEscapedString | Promise<HtmlEscapedString>
 
@@ -16,9 +16,11 @@ interface LayoutOptions {
     bodyClass?: string
     /** Open Graph tags are only emitted for content that is safe to unfurl (public artifacts, landing page). */
     og?: { title: string; description?: string; url: string }
+    /** Load the remote brand typeface. Off for pages where a swapped glyph could mislead a security decision. */
+    brandFont?: boolean
 }
 
-export function layout({ title, description, body, bodyClass, og }: LayoutOptions) {
+export function layout({ title, description, body, bodyClass, og, brandFont = true }: LayoutOptions) {
     return html`<!doctype html>
 <html lang="en">
 <head>
@@ -36,7 +38,7 @@ ${og.description ? html`<meta property="og:description" content="${og.descriptio
 <meta property="og:type" content="article">`
     : ''}
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="https://brand.posthog.com/fonts/roundhog.css">
+${brandFont ? raw(ROUNDHOG_STYLESHEET) : ''}
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="${bodyClass ?? ''}">
@@ -546,6 +548,9 @@ export function loginPage({ next, error, dev }: { next: string; error?: string; 
 export function consentPage({ user, details, handle }: { user: User; details: ConsentDescription; handle: string }) {
     return layout({
         title: 'Connect · PostHog Artifacts',
+        // The client, domain and redirect host below decide whether to grant access; render them in local fonts
+        // so no remote font file can draw one hostname as another.
+        brandFont: false,
         body: html`${appBar({ user, next: '/' })}
 <main class="page narrow">
   <h1>Connect ${details.clientName}?</h1>
