@@ -22,6 +22,7 @@ export interface AppEnv {
     POSTHOG_HOST?: string
     PUBLISH_LIMITER: RateLimit
     COMMENT_LIMITER: RateLimit
+    QUIZ_LIMITER: RateLimit
     REGISTER_LIMITER: RateLimit
 }
 
@@ -41,5 +42,5 @@ export interface User {
  * allowlist who sign in with their own PostHog account. public: anyone with the link.
  */
 export type Visibility = 'private' | 'team' | 'invited' | 'public'
-/** html: a page. slides: HTML where each <section> in <body> is a 1280×720 slide. markdown: prose. */
-export type Format = 'html' | 'slides' | 'markdown'
+/** html: a page. slides: HTML where each <section> in <body> is a 1280×720 slide. markdown: prose. quiz: JSON questions, scored on the server. */
+export type Format = 'html' | 'slides' | 'markdown' | 'quiz'

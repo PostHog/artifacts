@@ -1,5 +1,6 @@
 import type { AppEnv, Format, User, Visibility } from './env'
 import { randomId, sha256Hex } from './lib/crypto'
+import { QuizError, parseQuiz } from './lib/quiz'
 
 export const MAX_CONTENT_BYTES = 5 * 1024 * 1024
 export const MAX_TITLE_LENGTH = 200
@@ -180,6 +181,15 @@ export async function publish(env: AppEnv, user: User, input: PublishInput): Pro
     if (bytes.byteLength === 0) throw new StoreError('invalid', 'Content is empty')
     if (bytes.byteLength > MAX_CONTENT_BYTES) {
         throw new StoreError('too_large', `Content is ${bytes.byteLength} bytes; the limit is ${MAX_CONTENT_BYTES}`)
+    }
+    if (input.format === 'quiz') {
+        // A quiz is checked before anything is stored, and the reason comes back by field name so it can be fixed.
+        try {
+            parseQuiz(input.content)
+        } catch (error) {
+            if (error instanceof QuizError) throw new StoreError('invalid', error.message)
+            throw error
+        }
     }
     const title = input.title?.trim().slice(0, MAX_TITLE_LENGTH)
     const invites = input.invited ? normalizeInvites(input.invited) : undefined
@@ -374,12 +384,14 @@ export async function deleteArtifact(env: AppEnv, user: User, id: string): Promi
         env.DB.prepare('DELETE FROM versions WHERE artifact_id = ?').bind(id),
         env.DB.prepare('DELETE FROM artifact_invites WHERE artifact_id = ?').bind(id),
         env.DB.prepare('DELETE FROM comments WHERE artifact_id = ?').bind(id),
+        env.DB.prepare('DELETE FROM quiz_attempts WHERE artifact_id = ?').bind(id),
         env.DB.prepare('DELETE FROM artifacts WHERE id = ?').bind(id),
     ])
     if (keys.length) await env.BUCKET.delete(keys)
 }
 
 export function contentTypeFor(format: Format): string {
+    if (format === 'quiz') return 'application/json; charset=utf-8'
     return format === 'markdown' ? 'text/markdown; charset=utf-8' : 'text/html; charset=utf-8'
 }
 

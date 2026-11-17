@@ -157,7 +157,7 @@ assert.equal(init.serverInfo.name, 'posthog-artifacts')
 const { tools } = await mcp('tools/list', {})
 assert.deepEqual(
     tools.map((t) => t.name).sort(),
-    ['delete_artifact', 'get_artifact', 'list_artifacts', 'list_comments', 'publish_artifact', 'set_visibility', 'update_artifact']
+    ['brand_artifact', 'delete_artifact', 'get_artifact', 'list_artifacts', 'list_comments', 'publish_artifact', 'quiz_results', 'set_visibility', 'update_artifact']
 )
 step(`MCP initialize + tools/list (${tools.length} tools)`)
 
@@ -637,6 +637,212 @@ await call('set_visibility', { artifact_id: an.id, visibility: 'public' })
 assert.ok(!(await anFrame(anon)).includes('__paInstalled'), 'anonymous link viewers never get the annotator')
 await call('delete_artifact', { artifact_id: an.id })
 step('anchored comments: guests get the annotator, anonymous viewers do not')
+
+// --- Quizzes ----------------------------------------------------------------------
+const KEY = 'KEY-EXPLANATION-7731'
+const quizDef = {
+    intro: 'Check what you remember about `funnels`.',
+    pass_mark: 60,
+    attempts: 1,
+    questions: [
+        { id: 'q1', type: 'single', prompt: 'Which step is first?', options: [{ id: 'a', text: 'Signup' }, { id: 'b', text: 'Purchase' }], correct: ['a'], explanation: KEY },
+        { id: 'q2', type: 'multi', prompt: 'Pick the events', options: [{ id: 'x', text: 'Pageview' }, { id: 'y', text: 'Click' }, { id: 'z', text: 'Nothing' }], correct: ['x', 'y'], explanation: KEY },
+        { id: 'q3', type: 'true_false', prompt: 'Funnels are ordered?', correct: ['true'], explanation: KEY },
+    ],
+}
+const quizText = JSON.stringify(quizDef)
+const bad = async (content) => {
+    const r = await mcp('tools/call', { name: 'publish_artifact', arguments: { title: 'Bad quiz', format: 'quiz', content } })
+    assert.ok(r.isError, 'an invalid quiz is refused')
+    return r.content[0].text
+}
+assert.match(await bad('not json'), /not valid JSON/)
+assert.match(await bad(JSON.stringify({ questions: [{ ...quizDef.questions[0], correct: ['zzz'] }] })), /questions\[0\]\.correct: "zzz"/)
+step('quiz: invalid quizzes are refused, naming the field')
+
+const qz = await call('publish_artifact', { title: 'Funnels quiz', format: 'quiz', content: quizText, visibility: 'team' })
+const qzForm = (jar, id, fields, headers) => form(jar, `/a/${id}/quiz`, fields, headers)
+const qzFields = (v, picks) => {
+    const body = new URLSearchParams({ v: String(v) })
+    for (const [k, vals] of Object.entries(picks)) for (const val of vals) body.append(`q_${k}`, val)
+    return body
+}
+const qzPost = (jar, id, v, picks, headers = {}) =>
+    request(jar, `/a/${id}/quiz`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: BASE, ...headers }, body: qzFields(v, picks) })
+
+// The answer key never reaches a taker: not in the qr, not in the iframe route, not in the agent handover.
+let qpage = await (await view(other, `/a/${qz.id}`)).text()
+assert.ok(qpage.includes('Which step is first?') && qpage.includes('<code>funnels</code>'), 'questions render, code spans too')
+assert.ok(!qpage.includes(KEY) && !qpage.includes('"correct"'), 'no key and no explanation in the page')
+assert.ok(!qpage.includes('<iframe'), 'a quiz is not an iframe')
+assert.ok(!qpage.includes('data-handover'), 'non-owners get no agent handover for a quiz')
+res = await request(other, `/c/${qz.id}/1?t=forged`, { headers: { 'Sec-Fetch-Dest': 'iframe' } })
+assert.ok([403, 404].includes(res.status))
+res = await form(other, `/a/${qz.id}/handover`, {}, { 'Content-Type': 'application/json' })
+assert.equal(res.status, 404, 'the handover route refuses non-owners for a quiz')
+res = await request(owner, `/a/${qz.id}/handover`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: BASE }, body: '{}' })
+assert.equal(res.status, 200, 'the owner can still hand the quiz source to an agent')
+step('quiz: the answer key is nowhere a taker can reach')
+
+// Scoring: a pass, and the score is shown without the key (show_answers is off).
+res = await qzPost(other, qz.id, 1, { q1: ['a'], q2: ['x', 'y'], q3: ['true'] })
+assert.equal(res.status, 302)
+const attemptUrl = res.headers.get('Location')
+assert.match(attemptUrl, /\?attempt=[0-9A-Za-z]{22}$/)
+qpage = await (await view(other, attemptUrl)).text()
+assert.match(qpage, /100%/)
+assert.match(qpage, /Passed/)
+assert.ok(!qpage.includes(KEY) && !qpage.includes('Correct answer') && !qpage.includes('correct answer'), 'the result shows no key while show_answers is off')
+step('quiz: submit, score, pass')
+
+// One attempt per person: the form goes, and a second post is refused.
+qpage = await (await view(other, `/a/${qz.id}`)).text()
+assert.match(qpage, /used all your attempts/)
+assert.ok(!qpage.includes('Submit answers'))
+res = await qzPost(other, qz.id, 1, { q1: ['b'] })
+assert.match(res.headers.get('Location'), /qerr=limit/)
+// Someone else's result isn't readable by a third person.
+res = await view(anon, attemptUrl)
+assert.equal(res.status, 302, 'a result is not readable signed out')
+step('quiz: attempts limit holds')
+
+// Submissions sent at the same moment can't all pass the limit: one attempt stored, however many raced.
+{
+    const racer = new Jar()
+    await request(racer, '/login/dev', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: BASE }, body: new URLSearchParams({ email: 'racer@posthog.com', next: '/' }) })
+    const burst = await Promise.all(Array.from({ length: 8 }, () => qzPost(racer, qz.id, 1, { q1: ['b'] })))
+    const reasons = burst.map((r) => /qerr=(\w+)/.exec(r.headers.get('Location') ?? '')?.[1] ?? 'stored')
+    const stored = reasons.filter((r) => r === 'stored').length
+    console.log('  burst outcomes:', reasons.join(','))
+    assert.equal(stored, 1, `a burst of simultaneous posts stores one attempt, got ${stored}`)
+    const rstats = await call('quiz_results', { artifact_id: qz.id })
+    assert.equal(rstats.results.filter((r) => r.who.email === 'racer@posthog.com').length, 1, 'and only one is recorded')
+    // A repeated choice is refused, as the docs say.
+    res = await qzPost(racer, qz.id, 1, { q1: ['a', 'a'] })
+    assert.match(res.headers.get('Location') ?? '', /qerr=invalid/, 'a repeated choice is refused')
+}
+step('quiz: simultaneous submissions respect the limit; repeats refused')
+
+// Failing, tampering, staleness and cross-site posts. A second staff member has their own single attempt.
+const staff2 = new Jar()
+await request(staff2, '/login/dev', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: BASE }, body: new URLSearchParams({ email: 'third@posthog.com', next: '/' }) })
+res = await qzPost(staff2, qz.id, 1, { q1: ['zzz'] })
+assert.match(res.headers.get('Location'), /qerr=invalid/, 'an option the quiz does not have is refused')
+res = await qzPost(staff2, qz.id, 1, { nope: ['a'] })
+assert.match(res.headers.get('Location'), /qerr=invalid/, 'a question the quiz does not have is refused')
+res = await qzPost(staff2, qz.id, 1, { q1: ['a', 'b'] })
+assert.match(res.headers.get('Location'), /qerr=invalid/, 'two picks on a single question are refused')
+res = await qzPost(staff2, qz.id, 99, { q1: ['a'] })
+assert.match(res.headers.get('Location'), /qerr=stale/, 'a submission for another version is refused')
+res = await qzPost(staff2, qz.id, 1, { q1: ['a'] }, { Origin: 'https://evil.example' })
+assert.equal(res.status, 403, 'cross-site submission refused')
+res = await qzPost(staff2, qz.id, 1, { q1: ['b'], q2: ['z'], q3: ['false'] })
+const failUrl = res.headers.get('Location')
+assert.match(await (await view(staff2, failUrl)).text(), /Not passed/)
+assert.match(await (await view(staff2, failUrl)).text(), /0%/)
+step('quiz: failing, tampered ids, stale version and cross-site posts')
+
+// Owner: results, owner-only; previews are not counted.
+res = await qzPost(owner, qz.id, 1, { q1: ['a'], q2: ['x', 'y'], q3: ['true'] })
+assert.match(await (await view(owner, res.headers.get('Location'))).text(), /your preview, not counted/)
+res = await qzPost(owner, qz.id, 1, { q1: ['a'] })
+assert.equal(res.status, 302, 'the owner is never limited')
+assert.equal((await view(other, `/a/${qz.id}/results`)).status, 404, 'results are the owner’s only')
+assert.equal((await view(anon, `/a/${qz.id}/results`)).status, 302)
+let qr = await (await view(owner, `/a/${qz.id}/results`)).text()
+assert.match(qr, /3<\/strong><span class="muted small"> attempts/, 'three counted attempts, not the owner previews')
+assert.match(qr, /33%/, 'pass rate')
+assert.ok(qr.includes('third@posthog.com') && qr.includes('other@posthog.com'), 'the owner sees who took it, by email')
+const stats = await call('quiz_results', { artifact_id: qz.id })
+assert.equal(stats.attempts, 3)
+assert.equal(stats.pass_rate, 33)
+assert.equal(stats.questions[0].picks.a, 1)
+assert.equal(stats.questions[0].picks.b, 2)
+assert.ok(stats.results.every((r) => r.who.email))
+step('quiz: owner results (page and MCP); previews are not counted')
+
+// show_answers: the result reveals the key and explanation, to that taker only.
+const rev = await call('publish_artifact', { title: 'Reveal', format: 'quiz', content: JSON.stringify({ ...quizDef, show_answers: true, attempts: null }), visibility: 'team' })
+res = await qzPost(other, rev.id, 1, { q1: ['b'], q2: ['x'], q3: ['true'] })
+qpage = await (await view(other, res.headers.get('Location'))).text()
+assert.ok(qpage.includes(KEY) && qpage.includes('correct answer'), 'with show_answers on, the result shows the key')
+assert.ok(!(await (await view(other, `/a/${rev.id}`)).text()).includes(KEY), 'but the quiz page itself never does')
+res = await qzPost(other, rev.id, 1, { q1: ['a'] })
+assert.equal(res.status, 302, 'unlimited attempts')
+step('quiz: show_answers reveals the key only on a result')
+
+// Visibility: public quizzes take anonymous attempts, with an optional typed name that is escaped; invited quizzes record the guest.
+await call('set_visibility', { artifact_id: rev.id, visibility: 'public' })
+const visitor = new Jar()
+await view(visitor, `/a/${rev.id}`)
+res = await request(visitor, `/a/${rev.id}/quiz`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: BASE }, body: (() => { const b = qzFields(1, { q1: ['a'], q2: ['x', 'y'], q3: ['true'] }); b.set('taker_name', '<img src=x onerror=1>'); return b })() })
+assert.equal(res.status, 302, 'signed-out takers can submit a public quiz')
+qr = await (await view(owner, `/a/${rev.id}/results`)).text()
+assert.ok(qr.includes('&lt;img src=x onerror=1&gt;') && !qr.includes('<img src=x onerror'), 'a typed name is escaped')
+assert.match(qr, /signed out/)
+res = await request(anon, `/a/${rev.id}/quiz`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: BASE }, body: qzFields(1, { q1: ['a'] }) })
+assert.equal(res.status, 302, 'a taker without a cookie still gets an identity')
+await call('set_visibility', { artifact_id: rev.id, visibility: 'invited', invited_emails: ['ana@acme.com'] })
+const quizGuest = await guestLogin('ana@acme.com')
+res = await qzPost(quizGuest, rev.id, 1, { q1: ['a'], q2: ['x', 'y'], q3: ['true'] })
+assert.equal(res.status, 302)
+const strangerG = await guestLogin('stranger@example.com')
+assert.equal((await qzPost(strangerG, rev.id, 1, { q1: ['a'] })).status, 404, 'a stranger on an invited quiz is refused')
+const gstats = await call('quiz_results', { artifact_id: rev.id })
+assert.ok(gstats.results.some((r) => r.who.kind === 'guest' && r.who.email === 'ana@acme.com'), 'the guest is recorded by email')
+assert.ok(gstats.results.some((r) => r.who.kind === 'anonymous'), 'and anonymous takers by name only')
+step('quiz: public takers are anonymous, invited takers recorded, strangers refused')
+
+// An old result link stops working for takers once the quiz is replaced; the owner keeps it.
+{
+    const old = await call('publish_artifact', { title: 'Old key', format: 'quiz', content: JSON.stringify({ ...quizDef, show_answers: true, attempts: null }), visibility: 'team' })
+    res = await qzPost(other, old.id, 1, { q1: ['b'], q2: ['x'], q3: ['true'] })
+    const oldUrl = res.headers.get('Location')
+    assert.ok((await (await view(other, oldUrl)).text()).includes(KEY), 'the result opens while its version is current')
+    await call('publish_artifact', { artifact_id: old.id, format: 'quiz', content: JSON.stringify({ ...quizDef, show_answers: true, attempts: null }), note: 'v2' })
+    assert.ok(!(await (await view(other, oldUrl)).text()).includes(KEY), 'a replaced version’s questions and key are gone for the taker')
+    assert.ok((await (await view(owner, oldUrl)).text()).includes(KEY), 'but the owner can still open it')
+    await call('delete_artifact', { artifact_id: old.id })
+}
+step('quiz: a replaced version’s result link stops revealing it to takers')
+
+// Signed-out takers of a quiz that doesn't reveal answers get pass or fail, never points; bad forms are cut off early.
+{
+    const hid = await call('publish_artifact', { title: 'Hidden', format: 'quiz', content: JSON.stringify({ ...quizDef, show_answers: false, attempts: null }), visibility: 'public' })
+    const fresh = new Jar()
+    await view(fresh, `/a/${hid.id}`)
+    res = await qzPost(fresh, hid.id, 1, { q1: ['a'] })
+    const page = await (await view(fresh, res.headers.get('Location'))).text()
+    assert.ok(/Not passed|Passed/.test(page) && !/ of \d+ points/.test(page) && !page.includes('class="big"'), 'a signed-out taker sees no points')
+    res = await qzPost(fresh, hid.id, 1, { nope: ['a'] })
+    assert.match(res.headers.get('Location') ?? '', /qerr=invalid/, 'an unknown question is refused')
+    const huge = new URLSearchParams({ v: '1' })
+    for (let i = 0; i < 4000; i++) huge.append(`q_x${i}`, 'a')
+    res = await request(fresh, `/a/${hid.id}/quiz`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: BASE }, body: huge })
+    assert.equal(res.status, 413, 'an oversized form is refused before it is parsed')
+    // Signed-in takers still see their points.
+    await call('set_visibility', { artifact_id: hid.id, visibility: 'team' })
+    res = await qzPost(other, hid.id, 1, { q1: ['a'] })
+    assert.match(await (await view(other, res.headers.get('Location'))).text(), / of \d+ points/, 'a signed-in taker sees their points')
+    // Owner totals count everything, and the list puts signed-in people first.
+    const hs = await call('quiz_results', { artifact_id: hid.id, limit: 1 })
+    assert.equal(hs.attempts, 2, 'totals count every attempt, not the listed slice')
+    assert.equal(hs.shown, 1)
+    assert.notEqual(hs.results[0].who.kind, 'anonymous', 'signed-in people are listed first')
+    await call('delete_artifact', { artifact_id: hid.id })
+}
+step('quiz: signed-out takers see pass or fail only; oversized and unknown forms refused; totals cover all attempts')
+
+// A new version is a new quiz: attempts are per version, and results keep both.
+const qz2 = await call('publish_artifact', { artifact_id: qz.id, format: 'quiz', content: quizText, note: 'v2' })
+res = await qzPost(other, qz.id, 2, { q1: ['a'], q2: ['x', 'y'], q3: ['true'] })
+assert.equal(res.status, 302, 'a new version gives a new attempt')
+const v1stats = await call('quiz_results', { artifact_id: qz.id, version: 1 })
+assert.equal(v1stats.attempts, 3, 'version 1 results are kept')
+// Switching format back to html on a new version works, and the old quiz stays out of the iframe.
+await call('delete_artifact', { artifact_id: qz.id })
+await call('delete_artifact', { artifact_id: rev.id })
+step('quiz: versions keep their own attempts; delete removes the quiz')
 
 // --- Security regressions ---------------------------------------------------
 // Open redirect: browsers strip tabs, so /<TAB>/evil.example would become //evil.example
