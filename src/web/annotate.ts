@@ -145,7 +145,7 @@ const SCRIPT = String.raw`(function () {
     host.id = '__pa_host';
     host.style.cssText = 'all:initial;position:fixed;z-index:2147483647;display:none';
     var root = host.attachShadow({ mode: 'closed' });
-    root.innerHTML = '<style>button{font:600 12px/1 system-ui,sans-serif;padding:7px 10px;border-radius:6px;border:0;background:#1d1f17;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer}button:hover{background:#f54e00}</style><button type="button">Comment</button>';
+    root.innerHTML = '<style>button{font:600 12px/1 system-ui,sans-serif;padding:7px 10px;border-radius:6px;border:0;background:#1d1f17;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer}button:hover{background:#ff4800}</style><button type="button">Comment</button>';
     btn = root.querySelector('button');
     btn.addEventListener('mousedown', function (e) { e.preventDefault(); });
     btn.addEventListener('click', function () {
