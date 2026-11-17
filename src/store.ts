@@ -323,23 +323,19 @@ export function cleanAnchor(input?: { exact?: string; prefix?: string; suffix?: 
     return { exact, prefix: strip(input?.prefix).slice(-MAX_ANCHOR_CONTEXT), suffix: strip(input?.suffix).slice(0, MAX_ANCHOR_CONTEXT) }
 }
 
+const listCommentsStatement = (env: AppEnv, id: string) =>
+    env.DB.prepare('SELECT * FROM comments WHERE artifact_id = ? ORDER BY created_at ASC LIMIT ?').bind(id, MAX_COMMENTS_PER_ARTIFACT)
+
 export async function listComments(env: AppEnv, id: string): Promise<Comment[]> {
-    const { results } = await env.DB.prepare('SELECT * FROM comments WHERE artifact_id = ? ORDER BY created_at ASC LIMIT ?')
-        .bind(id, MAX_COMMENTS_PER_ARTIFACT)
-        .all<Comment>()
+    const { results } = await listCommentsStatement(env, id).all<Comment>()
     return results
 }
 
-export async function countComments(env: AppEnv, id: string): Promise<number> {
-    return (await env.DB.prepare('SELECT COUNT(*) AS n FROM comments WHERE artifact_id = ?').bind(id).first<{ n: number }>())?.n ?? 0
-}
-
 /** Stored as plain text and only ever rendered escaped. The caller has already decided this person may comment. */
-export async function addComment(env: AppEnv, artifact: Artifact, author: Commenter, body: string, anchor: Anchor | null = null): Promise<Comment> {
+export async function addComment(env: AppEnv, artifact: Artifact, author: Commenter, body: string, anchor: Anchor | null = null): Promise<Comment[]> {
     const text = body.replace(/\r\n/g, '\n').trim()
     if (!text) throw new StoreError('invalid', 'Write something first')
     if (text.length > MAX_COMMENT_LENGTH) throw new StoreError('too_large', `Comments are limited to ${MAX_COMMENT_LENGTH} characters`)
-    if ((await countComments(env, artifact.id)) >= MAX_COMMENTS_PER_ARTIFACT) throw new StoreError('too_large', 'This artifact has reached its comment limit')
     const comment: Comment = {
         id: randomId(),
         artifact_id: artifact.id,
@@ -353,22 +349,43 @@ export async function addComment(env: AppEnv, artifact: Artifact, author: Commen
         anchor_suffix: anchor?.suffix ?? null,
         created_at: Date.now(),
     }
-    await env.DB.prepare(
-        'INSERT INTO comments (id, artifact_id, version, author_email, author_name, author_kind, body, anchor_exact, anchor_prefix, anchor_suffix, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    )
-        .bind(comment.id, comment.artifact_id, comment.version, comment.author_email, comment.author_name, comment.author_kind, comment.body, comment.anchor_exact, comment.anchor_prefix, comment.anchor_suffix, comment.created_at)
-        .run()
-    return comment
+    const [inserted, listed] = await env.DB.batch<Comment>([
+        env.DB.prepare(
+            'INSERT INTO comments (id, artifact_id, version, author_email, author_name, author_kind, body, anchor_exact, anchor_prefix, anchor_suffix, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM comments WHERE artifact_id = ?) < ?'
+        ).bind(
+            comment.id,
+            comment.artifact_id,
+            comment.version,
+            comment.author_email,
+            comment.author_name,
+            comment.author_kind,
+            comment.body,
+            comment.anchor_exact,
+            comment.anchor_prefix,
+            comment.anchor_suffix,
+            comment.created_at,
+            artifact.id,
+            MAX_COMMENTS_PER_ARTIFACT
+        ),
+        listCommentsStatement(env, artifact.id),
+    ])
+    if (!inserted?.meta.changes) throw new StoreError('too_large', 'This artifact has reached its comment limit')
+    return listed?.results ?? []
 }
 
-/** The author can delete their own comment, and the artifact's owner can delete any. Returns whether a row was removed. */
-export async function deleteComment(env: AppEnv, artifact: Artifact, commentId: string, actor: { email: string; kind: 'staff' | 'guest'; owner: boolean }): Promise<boolean> {
-    const comment = await env.DB.prepare('SELECT * FROM comments WHERE id = ? AND artifact_id = ?').bind(commentId, artifact.id).first<Comment>()
-    if (!comment) return false
-    const isAuthor = comment.author_kind === actor.kind && comment.author_email === actor.email.toLowerCase()
-    if (!isAuthor && !actor.owner) return false
-    await env.DB.prepare('DELETE FROM comments WHERE id = ?').bind(commentId).run()
-    return true
+/** The author can delete their own comment, and the artifact's owner can delete any. */
+export async function deleteComment(env: AppEnv, artifact: Artifact, commentId: string, actor: { email: string; kind: 'staff' | 'guest'; owner: boolean }): Promise<Comment[]> {
+    const [, listed] = await env.DB.batch<Comment>([
+        env.DB.prepare('DELETE FROM comments WHERE id = ? AND artifact_id = ? AND (? = 1 OR (author_kind = ? AND author_email = ?))').bind(
+            commentId,
+            artifact.id,
+            actor.owner ? 1 : 0,
+            actor.kind,
+            actor.email.toLowerCase()
+        ),
+        listCommentsStatement(env, artifact.id),
+    ])
+    return listed?.results ?? []
 }
 
 export async function setCommentsEnabled(env: AppEnv, user: User, id: string, enabled: boolean): Promise<Artifact> {
