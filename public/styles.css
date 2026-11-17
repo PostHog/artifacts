@@ -379,6 +379,7 @@ textarea.text { resize: vertical; min-height: 72px; font-size: 13px; line-height
 .comment .body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; margin-top: 4px; }
 .comment form { margin-top: 4px; }
 .comment-settings { margin-bottom: 12px; }
+.comment-submit { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .small { font-size: 12px; }
 button.small { font-size: 12px; padding: 2px 6px; }
 

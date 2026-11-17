@@ -123,25 +123,11 @@ export interface CommentsView {
     error?: string
 }
 
-function commentsPanel(artifact: Artifact, { enabled, items, me, owner, open, error }: CommentsView) {
+function commentItems(artifact: Artifact, { items, me, owner }: Pick<CommentsView, 'items' | 'me' | 'owner'>) {
     const canDelete = (c: Comment) => owner || (!!me && c.author_kind === me.kind && c.author_email === me.email)
-    return html`<details class="pop" data-close-outside data-comments data-can-comment="${me ? '1' : '0'}" ${open ? 'open' : ''}>
-    <summary class="btn secondary"><span>Comments${enabled ? ` (${items.length})` : ''}</span></summary>
-    <div class="panel right comments" id="comments">
-      <h3>Comments</h3>
-      ${owner
-          ? html`<form method="post" action="/a/${artifact.id}/comments/settings" class="comment-settings">
-        <input type="hidden" name="enabled" value="${enabled ? '0' : '1'}">
-        <p class="hint">${enabled ? 'On. ' : 'Off. '}Comments are visible to everyone who can open this artifact and is signed in (PostHog staff, and invited people), never to anonymous link viewers.</p>
-        <button class="btn secondary" type="submit"><span>${enabled ? 'Turn comments off' : 'Turn comments on'}</span></button>
-      </form>`
-          : ''}
-      ${enabled
-          ? html`${error ? html`<p class="error small">${error}</p>` : ''}
-      <ul class="comment-list">
-        ${items.length
-            ? items.map(
-                  (c) => html`<li class="comment" data-comment-id="${c.id}" ${c.anchor_exact ? html`data-exact="${c.anchor_exact}" data-prefix="${c.anchor_prefix ?? ''}" data-suffix="${c.anchor_suffix ?? ''}"` : ''}>
+    return items.length
+        ? items.map(
+              (c) => html`<li class="comment" data-comment-id="${c.id}" ${c.anchor_exact ? html`data-exact="${c.anchor_exact}" data-prefix="${c.anchor_prefix ?? ''}" data-suffix="${c.anchor_suffix ?? ''}"` : ''}>
           <div class="row"><strong title="${owner ? c.author_email : ''}">${c.author_name}</strong>
             <span class="muted small">${relativeTime(c.created_at)}${c.version !== artifact.latest_version ? ` · on v${c.version}` : ''}</span></div>
           ${c.anchor_exact
@@ -152,8 +138,30 @@ function commentsPanel(artifact: Artifact, { enabled, items, me, owner, open, er
               ? html`<form method="post" action="/a/${artifact.id}/comments/${c.id}/delete"><button class="ghost small" type="submit">Delete</button></form>`
               : ''}
         </li>`
-              )
-            : html`<li class="hint">No comments yet.</li>`}
+          )
+        : html`<li class="hint">No comments yet.</li>`
+}
+
+export async function commentItemsHtml(artifact: Artifact, view: Pick<CommentsView, 'items' | 'me' | 'owner'>): Promise<string> {
+    return (await html`${commentItems(artifact, view)}`).toString()
+}
+
+function commentsPanel(artifact: Artifact, { enabled, items, me, owner, open, error }: CommentsView) {
+    return html`<details class="pop" data-close-outside data-comments data-can-comment="${me ? '1' : '0'}" ${open ? 'open' : ''}>
+    <summary class="btn secondary"><span data-comment-count>Comments${enabled ? ` (${items.length})` : ''}</span></summary>
+    <div class="panel right comments" id="comments">
+      <h3>Comments</h3>
+      ${owner
+          ? html`<form method="post" action="/a/${artifact.id}/comments/settings" class="comment-settings">
+        <input type="hidden" name="enabled" value="${enabled ? '0' : '1'}">
+        <p class="hint">${enabled ? 'On. ' : 'Off. '}Comments are visible to everyone who can open this artifact and is signed in (PostHog staff, and invited people), never to anonymous link viewers.</p>
+        <button class="btn secondary" type="submit"><span>${enabled ? 'Turn comments off' : 'Turn comments on'}</span></button>
+      </form>`
+          : ''}
+      ${enabled
+          ? html`<p class="error small" data-comment-error ${error ? '' : 'hidden'}>${error ?? ''}</p>
+      <ul class="comment-list" data-comment-list>
+        ${commentItems(artifact, { items, me, owner })}
       </ul>
       ${me
           ? html`<form method="post" action="/a/${artifact.id}/comments" class="stack" data-comment-form>
@@ -161,7 +169,7 @@ function commentsPanel(artifact: Artifact, { enabled, items, me, owner, open, er
         <div class="composing" data-composing hidden><span class="muted small">Commenting on</span> <q data-composing-text></q> <button type="button" class="ghost small" data-composing-clear>Clear</button></div>
         <input type="hidden" name="anchor_exact"><input type="hidden" name="anchor_prefix"><input type="hidden" name="anchor_suffix">
         <textarea class="text" name="body" rows="3" maxlength="2000" placeholder="Add a comment" aria-label="Comment" required></textarea>
-        <button class="btn" type="submit"><span>Post comment</span></button>
+        <div class="comment-submit"><span class="muted small" data-submit-hint hidden></span><button class="btn" type="submit"><span>Post comment</span></button></div>
       </form>`
           : html`<p class="hint">Sign in to comment.</p>`}`
           : ''}

@@ -2,7 +2,7 @@ import { AuthorizationError, CimdFetchError } from '@cloudflare/workers-oauth-pr
 import { Hono, type Context } from 'hono'
 import type { AppEnv, User } from '../env'
 import { type ViewerActor, type ViewerType, actorIdentity, anonymousId, guestAnalyticsId, track } from '../lib/analytics'
-import type { Artifact } from '../store'
+import type { Artifact, Comment } from '../store'
 import { deriveSecret, sign } from '../lib/crypto'
 import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/policy'
 import { type Guest, clearGuestCookie, getGuest, getGuestIdentity, guestCookie, normalizeEmail } from '../lib/guest'
@@ -14,7 +14,7 @@ import { claudeCodeLink, codexLink, handoverPrompt } from './handover'
 import { QuizError, parseAnswers, parseQuiz, publicQuiz, questionStats, scoreQuiz } from '../lib/quiz'
 import { type Taker, attemptVersions, getAttempt, listAttempts, listTakerAttempts, parseStoredAnswers, recordAttempt } from '../quiz-store'
 import type { CommentsView, QuizReveal, QuizView } from './templates'
-import { consentPage, guestGatePage, homePage, loginPage, messagePage, quizErrorMessage, quizResultsPage, viewerPage } from './templates'
+import { commentItemsHtml, consentPage, guestGatePage, homePage, loginPage, messagePage, quizErrorMessage, quizResultsPage, viewerPage } from './templates'
 
 type Env = { Bindings: AppEnv; Variables: { user: User | null } }
 
@@ -257,6 +257,17 @@ const COMMENT_ERRORS: Record<string, string> = {
     full: 'This artifact has reached its comment limit.',
     slow: 'Too many comments. Wait a minute and try again.',
     anchor: "Couldn't attach that selection. Clear it and try again.",
+}
+
+const wantsJson = (c: Context<Env>) => (c.req.header('Accept') ?? '').includes('application/json')
+
+const noStore = (c: Context<Env>) => {
+    c.header('Cache-Control', 'private, no-store')
+    return c
+}
+
+async function commentsJson(c: Context<Env>, artifact: Artifact, who: { me: Commenter; owner: boolean }, comments: Comment[]) {
+    return noStore(c).json({ count: comments.length, html: await commentItemsHtml(artifact, { items: comments, me: who.me, owner: who.owner }) })
 }
 
 /** What a visitor sees at an invited artifact until they've signed in as someone on the list. Shows nothing about the artifact. */
@@ -661,21 +672,24 @@ app.post('/a/:id/comments', async (c) => {
     if (!artifact || !artifact.comments_enabled) return notFound(c)
     const who = await commenterFromRequest(c, artifact)
     if (!who) return notFound(c)
+    const json = wantsJson(c)
     const back = (error?: string) => c.redirect(`/a/${artifact.id}?c=1${error ? `&cerr=${error}` : ''}`)
+    const fail = (error: string) => (json ? noStore(c).json({ error: COMMENT_ERRORS[error] }, error === 'slow' ? 429 : 400) : back(error))
     const { success } = await c.env.COMMENT_LIMITER.limit({ key: `${who.me.kind}:${who.me.email}` })
-    if (!success) return back('slow')
+    if (!success) return fail('slow')
     const data = await c.req.formData()
     const field = (name: string) => String(data.get(name) ?? '')
+    let comments
     try {
         // The selection comes from the viewer page's own form, filled in from a message the artifact's script sent,
         // so it is untrusted text: cleaned and length-capped here, and only ever rendered escaped.
         const anchor = cleanAnchor({ exact: field('anchor_exact'), prefix: field('anchor_prefix'), suffix: field('anchor_suffix') })
-        await addComment(c.env, artifact, who.me, field('body'), anchor)
+        comments = await addComment(c.env, artifact, who.me, field('body'), anchor)
     } catch (error) {
         if (!(error instanceof StoreError)) throw error
-        return back(error.message === 'anchor' ? 'anchor' : error.code === 'invalid' ? 'empty' : error.message.includes('limit') && !error.message.includes('characters') ? 'full' : 'long')
+        return fail(error.message === 'anchor' ? 'anchor' : error.code === 'invalid' ? 'empty' : error.message.includes('limit') && !error.message.includes('characters') ? 'full' : 'long')
     }
-    return back()
+    return json ? commentsJson(c, artifact, who, comments) : back()
 })
 
 app.post('/a/:id/comments/settings', async (c) => {
@@ -694,11 +708,11 @@ app.post('/a/:id/comments/settings', async (c) => {
 app.post('/a/:id/comments/:commentId/delete', async (c) => {
     if (!sameOrigin(c)) return c.text('Forbidden', 403)
     const artifact = await getArtifact(c.env, c.req.param('id'))
-    if (!artifact) return notFound(c)
+    if (!artifact || !artifact.comments_enabled) return notFound(c)
     const who = await commenterFromRequest(c, artifact)
     if (!who) return notFound(c)
-    await deleteComment(c.env, artifact, c.req.param('commentId'), { email: who.me.email, kind: who.me.kind, owner: who.owner })
-    return c.redirect(`/a/${artifact.id}?c=1`)
+    const comments = await deleteComment(c.env, artifact, c.req.param('commentId'), { email: who.me.email, kind: who.me.kind, owner: who.owner })
+    return wantsJson(c) ? commentsJson(c, artifact, who, comments) : c.redirect(`/a/${artifact.id}?c=1`)
 })
 
 app.get('/c/:id/:version', async (c) => {

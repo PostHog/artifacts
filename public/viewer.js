@@ -104,6 +104,7 @@
     // ever fills a form the person still has to submit, or toggles a class.
     const frame = document.querySelector('.viewer iframe')
     const panel = document.querySelector('[data-comments]')
+    const thread = { highlight: () => {}, clearAnchor: () => {} }
     if (frame && panel) {
         const canComment = panel.dataset.canComment === '1'
         const commentForm = panel.querySelector('[data-comment-form]')
@@ -133,6 +134,8 @@
             composing.querySelector('[data-composing-text]').textContent = exact.length > 80 ? exact.slice(0, 80) + '…' : exact
         }
         commentForm?.querySelector('[data-composing-clear]')?.addEventListener('click', () => setAnchor(null))
+        thread.highlight = () => send({ type: 'highlights', items: items() })
+        if (commentForm) thread.clearAnchor = () => setAnchor(null)
 
         const flash = (id) => {
             const li = panel.querySelector(`[data-comment-id="${CSS.escape(id)}"]`)
@@ -162,6 +165,77 @@
             const quote = event.target.closest?.('[data-quote]')
             if (quote) send({ type: 'scroll', id: quote.dataset.quote })
         })
+    }
+
+    const commentList = panel?.querySelector('[data-comment-list]')
+    if (commentList) {
+        const commentForm = panel.querySelector('[data-comment-form]')
+        const count = panel.querySelector('[data-comment-count]')
+        const errorBox = panel.querySelector('[data-comment-error]')
+        const showError = (message) => {
+            errorBox.textContent = message || ''
+            errorBox.hidden = !message
+        }
+
+        const save = async (form) => {
+            const buttons = [...form.querySelectorAll('button')]
+            buttons.forEach((button) => (button.disabled = true))
+            showError('')
+            try {
+                const response = await fetch(form.action, {
+                    method: 'POST',
+                    headers: { Accept: 'application/json' },
+                    body: new URLSearchParams(new FormData(form)),
+                })
+                const data = await response.json().catch(() => null)
+                if (!response.ok || typeof data?.html !== 'string') {
+                    showError(typeof data?.error === 'string' ? data.error : "Couldn't save that. Reload the page and try again.")
+                    return false
+                }
+                commentList.innerHTML = data.html
+                count.textContent = `Comments (${data.count})`
+                thread.highlight()
+                return true
+            } catch {
+                showError("Couldn't reach the server. Try again.")
+                return false
+            } finally {
+                buttons.forEach((button) => (button.disabled = false))
+            }
+        }
+
+        panel.addEventListener('submit', async (event) => {
+            const form = event.target
+            const posting = form === commentForm
+            if (!posting && !commentList.contains(form)) return
+            event.preventDefault()
+            if (form.dataset.busy) return
+            form.dataset.busy = '1'
+            try {
+                if (!(await save(form)) || !posting) return
+                form.elements.body.value = ''
+                thread.clearAnchor()
+                const added = commentList.lastElementChild
+                added?.scrollIntoView({ block: 'nearest' })
+                added?.classList.add('flash')
+                setTimeout(() => added?.classList.remove('flash'), 1600)
+            } finally {
+                delete form.dataset.busy
+            }
+        })
+
+        const body = commentForm?.elements.body
+        body?.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey) || event.isComposing) return
+            event.preventDefault()
+            commentForm.requestSubmit()
+        })
+        const hint = commentForm?.querySelector('[data-submit-hint]')
+        if (hint) {
+            const mac = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform || navigator.platform || '')
+            hint.textContent = mac ? '⌘ Enter to post' : 'Ctrl+Enter to post'
+            hint.hidden = false
+        }
     }
 
     // Agent handover: fetch fresh links each time the popover opens, so a page left open for hours still works.

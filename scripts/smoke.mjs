@@ -526,6 +526,33 @@ res = await form(owner, `/a/${cm.id}/comments/${second}/delete`, {})
 assert.equal((await commentIds(owner)).length, 0, 'the owner can delete any comment')
 step('comments: private is owner-only; delete rules')
 
+const asJson = { Accept: 'application/json' }
+res = await post(other, '<b>fast</b> reply', asJson)
+assert.equal(res.status, 200)
+let thread = await res.json()
+assert.equal(thread.count, 1)
+assert.ok(thread.html.includes('&lt;b&gt;fast&lt;/b&gt; reply') && !thread.html.includes('<b>fast'), 'the returned thread is escaped')
+const fastId = thread.html.match(new RegExp(`/a/${cm.id}/comments/([0-9A-Za-z]{22})/delete`))?.[1]
+assert.ok(fastId, 'the author gets a delete control')
+res = await post(owner, '   ', asJson)
+assert.equal(res.status, 400)
+assert.equal((await res.json()).error, 'Write something first.')
+thread = await (await form(owner, `/a/${cm.id}/comments/${fastId}/delete`, {}, asJson)).json()
+assert.equal(thread.count, 0)
+assert.match(thread.html, /No comments yet/)
+step('comments: fetch posts and deletes get the escaped thread back, and errors as JSON')
+
+const d1 = (sql) => execFileSync('pnpm', ['exec', 'wrangler', 'd1', 'execute', 'artifacts-db', '--local', '--command', sql], { stdio: 'ignore' })
+d1(
+    `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 499) INSERT INTO comments (id, artifact_id, version, author_email, author_name, author_kind, body, created_at) SELECT 'fill' || i, '${cm.id}', 1, 'fill@posthog.com', 'Fill', 'staff', 'x', i FROM n`
+)
+assert.equal((await (await post(owner, 'the 500th', asJson)).json()).count, 500)
+res = await post(owner, 'one too many', asJson)
+assert.equal(res.status, 400)
+assert.equal((await res.json()).error, 'This artifact has reached its comment limit.')
+d1(`DELETE FROM comments WHERE artifact_id = '${cm.id}'`)
+step('comments: the 500-comment cap holds')
+
 // Invited artifact: guests comment, labelled without their email; removal from the list stops them.
 await call('set_visibility', { artifact_id: cm.id, visibility: 'invited', invited_emails: ['ana@acme.com', 'bob@globex.com'] })
 const gAna = await guestLogin('ana@acme.com')
@@ -541,6 +568,9 @@ assert.ok(cpage.includes('title="ana@acme.com"'), 'the owner can see who wrote i
 const anaComment = (await commentIds(gAna))[0]
 res = await form(gBob, `/a/${cm.id}/comments/${anaComment}/delete`, {})
 assert.equal((await commentIds(owner)).length, 1, "a guest can't delete another guest's comment")
+thread = await (await form(gBob, `/a/${cm.id}/comments/${anaComment}/delete`, {}, asJson)).json()
+assert.equal(thread.count, 1)
+assert.ok(!thread.html.includes('@acme.com') && !thread.html.includes('/delete'), 'the thread a guest gets back has no emails and no delete control for others')
 res = await form(stranger, `/a/${cm.id}/comments`, { body: 'not on the list' })
 assert.equal(res.status, 404, 'a PostHog account that is not on the list cannot comment')
 res = await form(other, `/a/${cm.id}/comments`, { body: 'staff, not owner' })
@@ -561,6 +591,8 @@ cpage = await (await view(gBob, `/a/${cm.id}`)).text()
 assert.ok(!cpage.includes('Comments') && !cpage.includes('From Ana'), 'comments hidden when off')
 res = await form(gBob, `/a/${cm.id}/comments`, { body: 'nope' })
 assert.equal(res.status, 404)
+res = await form(owner, `/a/${cm.id}/comments/${anaComment}/delete`, {}, asJson)
+assert.equal(res.status, 404, 'no thread comes back while comments are off')
 await call('update_artifact', { artifact_id: cm.id, comments_enabled: true })
 assert.equal((await call('list_comments', { artifact_id: cm.id })).comments.length, 1, 'turning comments off keeps them')
 await call('delete_artifact', { artifact_id: cm.id })
