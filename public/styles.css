@@ -1,5 +1,7 @@
-/* PostHog Artifacts — light mode mirrors posthog.com's palette, type and "3D" buttons; dark mode matches the
-   PostHog app's dark theme ([theme='dark'] in PostHog/posthog frontend/src/styles/base.scss). */
+/* PostHog Artifacts — the brandbook (https://brand.posthog.com/llms.txt) sets the typeface (RoundHog, loaded in
+   the page <head>), the logos and the accent colours; the brand token each accent comes from is in its comment.
+   Neutrals and the "3D" buttons follow posthog.com, and dark mode follows the PostHog app's dark theme
+   ([theme='dark'] in PostHog/posthog frontend/src/styles/base.scss). */
 :root {
     --bg: #eeefe9;
     --bg-accent: #e5e7e0;
@@ -9,18 +11,18 @@
     --text: #23251d;
     --text-secondary: #4d4f46;
     --text-muted: #73756b;
-    --orange: #eb9d2a;
-    --button-shadow: #cd8407;
+    --orange: #ffa81c; /* posthog-yellow */
+    --button-shadow: #e58e00; /* posthog-yellow-darker */
     --button-border: #b17816;
     --secondary-frame: var(--orange);
     --secondary-face: var(--surface);
     --secondary-border: var(--button-border);
-    --link: #f54e00;
-    --red: #f54e00;
-    --blue: #2f80fa;
-    --green: #6aa84f;
-    --highlight: rgba(235, 157, 42, 0.2);
-    --font: -apple-system, BlinkMacSystemFont, 'avenir next', avenir, 'segoe ui', 'helvetica neue', helvetica, Ubuntu, roboto, noto, arial, sans-serif;
+    --link: #ff4800; /* posthog-tangerine-darker */
+    --red: #f00008; /* posthog-coral-darker */
+    --blue: #0457ff; /* posthog-cobalt */
+    --green: #35b14e; /* posthog-green-darker */
+    --highlight: rgb(255 168 28 / 20%); /* posthog-yellow */
+    --font: 'RoundHog', -apple-system, BlinkMacSystemFont, 'avenir next', avenir, 'segoe ui', 'helvetica neue', helvetica, Ubuntu, roboto, noto, arial, sans-serif;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     color-scheme: light;
 }
@@ -36,15 +38,15 @@
         --text: hsl(0deg 0% 90%); /* text-primary: neutral-100 */
         --text-secondary: hsl(0deg 0% 65%); /* text-secondary: neutral-350 */
         --text-muted: hsl(0deg 0% 60%); /* text-tertiary: neutral-400 */
-        --orange: hsl(43deg 94% 57%); /* accent: the app swaps orange for yellow in dark mode */
+        --orange: #ffce1c; /* posthog-lemon: like the app, dark mode swaps the orange accent for yellow */
         --button-shadow: #926826; /* primary-3000-frame-bg-dark */
         --button-border: #b17816; /* primary-3000-button-border-dark */
         --secondary-frame: #323232; /* secondary-3000-frame-bg-dark */
         --secondary-face: #1d1f27; /* secondary-3000-button-bg-dark */
         --secondary-border: #4a4c52; /* secondary-3000-button-border-dark */
-        --link: hsl(43deg 94% 57%); /* accent */
-        --red: oklch(0.704 0.191 22.216deg); /* text-error: red-400 */
-        --highlight: hsl(43deg 94% 57% / 10%); /* accent-highlight-secondary */
+        --link: #ffce1c; /* posthog-lemon */
+        --red: #ff474d; /* posthog-coral */
+        --highlight: rgb(255 206 28 / 10%); /* posthog-lemon */
         color-scheme: dark;
     }
     .bar .brand img.logo-light { display: none; }
@@ -381,12 +383,12 @@ textarea.text { resize: vertical; min-height: 72px; font-size: 13px; line-height
 button.small { font-size: 12px; padding: 2px 6px; }
 
 /* Comments on a passage */
-.comment .quote { all: unset; display: block; box-sizing: border-box; width: 100%; margin-top: 4px; padding: 2px 8px; border-left: 3px solid #eb9d2a; color: var(--text-muted); font-size: 12px; cursor: pointer; overflow-wrap: anywhere; }
+.comment .quote { all: unset; display: block; box-sizing: border-box; width: 100%; margin-top: 4px; padding: 2px 8px; border-left: 3px solid var(--orange); color: var(--text-muted); font-size: 12px; cursor: pointer; overflow-wrap: anywhere; }
 .comment .quote:hover { color: var(--text); background: var(--highlight); }
 .comment .lost-note { display: none; }
 .comment.lost .lost-note { display: block; }
 .comment.flash { outline: 2px solid var(--orange); }
-.composing { border-left: 3px solid #eb9d2a; padding: 2px 8px; font-size: 12px; overflow-wrap: anywhere; }
+.composing { border-left: 3px solid var(--orange); padding: 2px 8px; font-size: 12px; overflow-wrap: anywhere; }
 .composing[hidden] { display: none; }
 .composing q { color: var(--text); }
 

@@ -37,13 +37,13 @@ body.ph-deck > section.ph-slide.ph-active { visibility: visible; }
   transform: scale(calc(var(--ph-thumb) / ${W})); pointer-events: none; }
 .ph-deck-thumb:hover .ph-frame { box-shadow: 0 0 0 1px #9ea096; }
 .ph-deck-thumb[aria-current="true"] { color: #23251d; }
-.ph-deck-thumb[aria-current="true"] .ph-frame { box-shadow: 0 0 0 2px #eb9d2a; }
-.ph-deck-thumb:focus-visible .ph-frame { outline: 2px solid #2f80fa; outline-offset: 2px; }
+.ph-deck-thumb[aria-current="true"] .ph-frame { box-shadow: 0 0 0 2px #ffa81c; }
+.ph-deck-thumb:focus-visible .ph-frame { outline: 2px solid #0457ff; outline-offset: 2px; }
 .ph-deck-bar { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); display: flex; align-items: center; gap: 4px;
   padding: 4px; border-radius: 8px; background: rgba(253,253,248,.92); box-shadow: 0 0 0 1px #d2d3cc; font: 500 12px/1 system-ui, sans-serif; color: #4d4f46; }
 .ph-deck-bar button { all: unset; cursor: pointer; padding: 6px 9px; border-radius: 5px; }
 .ph-deck-bar button:hover { background: #e5e7e0; color: #23251d; }
-.ph-deck-bar button:focus-visible { outline: 2px solid #2f80fa; }
+.ph-deck-bar button:focus-visible { outline: 2px solid #0457ff; }
 .ph-deck-bar .ph-count { min-width: 52px; text-align: center; font-variant-numeric: tabular-nums; }
 body.ph-deck.ph-presenting { background: #000; }
 body.ph-presenting .ph-deck-rail, body.ph-presenting .ph-deck-bar { display: none; }
@@ -59,7 +59,7 @@ body.ph-presenting > section.ph-slide { box-shadow: none; }
   .ph-deck-thumb { color: hsl(0deg 0% 60%); } .ph-deck-thumb[aria-current="true"] { color: hsl(0deg 0% 90%); }
   .ph-deck-thumb .ph-frame { box-shadow: 0 0 0 1px hsl(230deg 8% 20%); }
   .ph-deck-thumb:hover .ph-frame { box-shadow: 0 0 0 1px hsl(230deg 8% 40%); }
-  .ph-deck-thumb[aria-current="true"] .ph-frame { box-shadow: 0 0 0 2px hsl(43deg 94% 57%); }
+  .ph-deck-thumb[aria-current="true"] .ph-frame { box-shadow: 0 0 0 2px #ffce1c; }
   .ph-deck-bar { background: hsl(235deg 8% 15% / 92%); box-shadow: 0 0 0 1px hsl(230deg 8% 20%); color: hsl(0deg 0% 65%); }
   .ph-deck-bar button:hover { background: hsl(230deg 8% 20%); color: hsl(0deg 0% 90%); }
 }

@@ -36,6 +36,7 @@ ${og.description ? html`<meta property="og:description" content="${og.descriptio
 <meta property="og:type" content="article">`
     : ''}
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="https://brand.posthog.com/fonts/roundhog.css">
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="${bodyClass ?? ''}">

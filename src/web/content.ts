@@ -187,21 +187,22 @@ export function renderMarkdown(markdown: string): string {
     return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <base target="_blank">
+<link rel="stylesheet" href="https://brand.posthog.com/fonts/roundhog.css">
 <style>${MARKDOWN_CSS}</style></head>
 <body><article>${marked.parse(markdown, { async: false })}</article></body></html>`
 }
 
 const MARKDOWN_CSS = `
-:root { --text:#23251d; --muted:#4d4f46; --border:#d2d3cc; --bg:#fdfdf8; --code:#e5e7e0; --link:#f54e00; color-scheme: light; }
-@media (prefers-color-scheme: dark) { :root { --text:hsl(0deg 0% 90%); --muted:hsl(0deg 0% 65%); --border:hsl(230deg 8% 20%); --bg:hsl(240deg 8% 8%); --code:hsl(235deg 8% 15%); --link:hsl(43deg 94% 57%); color-scheme: dark; } }
+:root { --text:#23251d; --muted:#4d4f46; --border:#d2d3cc; --bg:#fdfdf8; --code:#e5e7e0; --link:#ff4800; --accent:#ffa81c; color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root { --text:hsl(0deg 0% 90%); --muted:hsl(0deg 0% 65%); --border:hsl(230deg 8% 20%); --bg:hsl(240deg 8% 8%); --code:hsl(235deg 8% 15%); --link:#ffce1c; --accent:#ffce1c; color-scheme: dark; } }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.65 -apple-system, BlinkMacSystemFont, 'avenir next', avenir, 'segoe ui', 'helvetica neue', helvetica, Ubuntu, roboto, noto, arial, sans-serif; -webkit-font-smoothing: antialiased; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.65 'RoundHog', -apple-system, BlinkMacSystemFont, 'avenir next', avenir, 'segoe ui', 'helvetica neue', helvetica, Ubuntu, roboto, noto, arial, sans-serif; -webkit-font-smoothing: antialiased; }
 article { max-width: 760px; margin: 0 auto; padding: 48px 24px 96px; }
 h1, h2, h3, h4 { line-height: 1.25; letter-spacing: -0.02em; margin: 2em 0 0.6em; }
 h1 { font-size: 2.1em; margin-top: 0; } h2 { font-size: 1.5em; } h3 { font-size: 1.2em; }
 p, ul, ol, blockquote, table, pre { margin: 0 0 1.1em; }
 a { color: var(--link); text-underline-offset: 2px; }
-blockquote { margin-left: 0; padding: 0.2em 1em; border-left: 3px solid #eb9d2a; color: var(--muted); }
+blockquote { margin-left: 0; padding: 0.2em 1em; border-left: 3px solid var(--accent); color: var(--muted); }
 code { font: 0.88em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code); padding: 0.15em 0.35em; border-radius: 4px; }
 pre { background: var(--code); padding: 14px 16px; border-radius: 6px; overflow-x: auto; border: 1px solid var(--border); }
 pre code { background: none; padding: 0; }
