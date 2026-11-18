@@ -76,6 +76,7 @@ If you removed something meaningful, say so in your reply.
 ## 4. Create or update
 
 - **Update by default.** If this session already published an artifact for the same thing, call `publish_artifact` with its `artifact_id` and a short `note` saying what changed. This keeps one link and adds a version. If you're unsure whether one exists, check `list_artifacts`.
+- **Send edits, not the whole document.** For an update, pass `edits` (a list of `old_text` → `new_text`, each `old_text` copied exactly from the content and unique in it) instead of `content`. The server applies them to the latest version. If you published the content in this conversation you already know it, so don't call `get_artifact` first. Fetch it only when the content isn't in this conversation. Resend the full `content` only when most of the document changes.
 - **New artifact:** call `publish_artifact` without `artifact_id`. Give it a specific `title` (for example "Q3 churn analysis: EU self-serve", not "Report") and a one-sentence `description`. The description shows in link previews.
 - Leave `visibility` unset, so the artifact stays private, unless the user asked you to share it.
   - "Share it", "share with the team", "send to <a colleague>", "post it in Slack": pass `visibility: "team"`. Only PostHog staff can open it.
@@ -84,6 +85,8 @@ If you removed something meaningful, say so in your reply.
   - If it's unclear whether people outside PostHog need it, use `"team"`. Prefer `"invited"` over `"public"` for anything customer-specific.
 
 ## 5. Report back
+
+The `publish_artifact` result already confirms the link, visibility, version and size. Don't call `get_artifact` or open the link to check it.
 
 Reply with:
 
@@ -103,7 +106,9 @@ Comments are off by default. To let people comment, call `update_artifact` with 
 
 ## Branding
 
-When the user asks to make an artifact "on brand", "PostHog branded" or to follow the brandbook, call `brand_artifact` with the artifact you published in this session (`list_artifacts` if unsure). It publishes a new version with the RoundHog typeface and brand colour variables added, and returns the palette, logo and illustration guidelines. Then apply those to the content (brand colours instead of invented ones, the right logo for the background) and publish it as one more version with `artifact_id`. Markdown artifacts already use PostHog typography; to use the full brand, republish them as `html`.
+When the user wants an artifact "on brand", "PostHog branded" or following the brandbook, decide that **before** you write it: pass `brand: true` to `publish_artifact` and write the content to the brand rules in that parameter's description (palette, typeface, logos) from the start. The server adds the RoundHog typeface and the brand colour variables, so one publish does the whole job.
+
+If the user asks to brand an artifact that is already published, the quickest path is one `publish_artifact` call with its `artifact_id`, `brand: true` and `edits` that swap in the brand colours and logo. `brand_artifact` still works, but it takes an extra version. Markdown artifacts already use PostHog typography; to use the full brand, republish them as `html`.
 
 ## Managing artifacts
 

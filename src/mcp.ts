@@ -3,8 +3,9 @@ import { instrument } from '@posthog/mcp'
 import type { PostHog } from 'posthog-node'
 import { createMcpHandler } from 'agents/mcp/server'
 import { z } from 'zod'
-import type { AppEnv, User } from './env'
-import { BRAND_GUIDELINES, applyBrand, isBranded } from './lib/brand'
+import type { AppEnv, Format, User } from './env'
+import { BRAND_GUIDELINES, BRAND_RULES, applyBrand, isBranded } from './lib/brand'
+import { EditError, applyEdits } from './lib/edits'
 import { APP, analyticsClient, clientIp, staffDistinctId, track } from './lib/analytics'
 import { QUIZ_DOCS, parseQuiz, questionStats } from './lib/quiz'
 import { isAllowedEmail, isRevoked, toUser } from './lib/session'
@@ -35,7 +36,7 @@ import {
 
 const INSTRUCTIONS = `PostHog Artifacts hosts finished content (reports, write-ups, HTML pages, Markdown docs) at artifacts.posthog.com.
 Every artifact has an unguessable link. New artifacts are private (only the owner can see them). Visibility "team" makes the latest version viewable by anyone signed in with a @posthog.com account (signed-out visitors are asked to sign in). Visibility "invited" makes it viewable only by the emails or company domains in invited_emails: they sign in with their own PostHog account and must be on the list. Use it for customers. Visibility "public" makes it viewable by anyone with the link, including people outside PostHog. When the user says to share with colleagues or the team, use "team". When they want specific outside people (a customer) to see it, use "invited" with their addresses; use "public" only when anyone with the link should see it.
-Publishing again with an artifact_id adds a new version; only the latest version is ever shared. Prefer updating an existing artifact over creating duplicates.
+Publishing again with an artifact_id adds a new version; only the latest version is ever shared. Prefer updating an existing artifact over creating duplicates, and send edits rather than the whole document for small changes. The publish result confirms the link, visibility and version, so there is no need to fetch an artifact back to check it.
 Owners can file artifacts in folders with the folder argument of publish_artifact or update_artifact. Folders only organize the owner's own list: they are private to the owner and never change who can view an artifact. Call list_folders first and reuse an existing name.`
 
 const artifactId = z.string().regex(/^[0-9A-Za-z]{22}$/).describe('The artifact ID (the last part of its URL)')
@@ -95,6 +96,8 @@ function fail(error: unknown) {
 
 const SERVER_VERSION = '1.0.0'
 
+const BRAND_FORMATS = 'brand applies to html and slides. Markdown already renders in PostHog typography; to use the full brand, publish it as html.'
+
 /** Per-request analytics for MCP Analytics (`$mcp_tool_call`). Null when analytics are off. */
 export interface McpTelemetry {
     posthog: PostHog
@@ -143,13 +146,28 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
         'publish_artifact',
         {
             title: 'Publish artifact',
-            description: `Publish HTML, Markdown, slides or a quiz as a hosted artifact and get its link. Omit artifact_id to create a new artifact (private by default); pass artifact_id to publish a new version of one you own. Content must be self-contained (inline CSS/JS, or assets from public CDNs) and at most ${MAX_CONTENT_BYTES / 1024 / 1024} MB.`,
+            description: `Publish HTML, Markdown, slides or a quiz as a hosted artifact and get its link. Omit artifact_id to create a new artifact (private by default); pass artifact_id to publish a new version of one you own, with either the full content or edits to the latest version. Content must be self-contained (inline CSS/JS, or assets from public CDNs) and at most ${MAX_CONTENT_BYTES / 1024 / 1024} MB. The result confirms the link, visibility, version and size, so there is no need to fetch the artifact back to check it.`,
             inputSchema: z.object({
-                content: z.string().min(1).describe('The full HTML document, Markdown text, or (for format "quiz") the quiz JSON'),
+                content: z.string().min(1).optional().describe('The full HTML document, Markdown text, or (for format "quiz") the quiz JSON. Pass this or edits.'),
+                edits: z
+                    .array(z.object({ old_text: z.string().min(1), new_text: z.string() }))
+                    .min(1)
+                    .max(100)
+                    .optional()
+                    .describe(
+                        'Instead of content, when updating (artifact_id): changes to the latest version, applied in order. Each old_text is copied exactly from the content and must occur exactly once (after the edits before it); new_text replaces it (empty deletes it). Prefer this for small changes: you do not need to fetch the content first if you published it in this conversation. If an edit fails, nothing is published and the error names it.'
+                    ),
                 format: z
                     .enum(['html', 'slides', 'markdown', 'quiz'])
+                    .optional()
                     .describe(
-                        'How to render the content. "html": a page. "slides": a deck; send one HTML document whose <body> contains one <section> per slide, each designed for a fixed 1280×720 canvas (the viewer scales it, and adds a thumbnail rail, arrow-key navigation and a Present button). "markdown": prose. ' + QUIZ_DOCS
+                        'How to render the content. Required with content; with edits it defaults to the latest version\'s format. "html": a page. "slides": a deck; send one HTML document whose <body> contains one <section> per slide, each designed for a fixed 1280×720 canvas (the viewer scales it, and adds a thumbnail rail, arrow-key navigation and a Present button). "markdown": prose. ' + QUIZ_DOCS
+                    ),
+                brand: z
+                    .boolean()
+                    .optional()
+                    .describe(
+                        `true to follow the PostHog brandbook (html and slides only): the server adds the RoundHog typeface and the --posthog-* colour variables to the published document. Use it whenever the user wants something on brand or PostHog branded, and write the content to these rules from the start, so one publish does the whole job: ${BRAND_RULES}`
                     ),
                 title: z.string().max(200).optional().describe('Required when creating; updates the title when given for a new version'),
                 description: z.string().max(1000).optional().describe('One-sentence summary shown in link previews'),
@@ -162,18 +180,52 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
             annotations: { destructiveHint: false, idempotentHint: false },
         },
         guarded(async (args) => {
+            // Argument checks first, so a malformed call doesn't use up the publish rate limit.
+            if ((args.content === undefined) === (args.edits === undefined)) throw new StoreError('invalid', 'Pass either content or edits')
+            if (args.edits && !args.artifact_id) throw new StoreError('invalid', 'edits need artifact_id: they change the latest version of an existing artifact')
+            if (args.content !== undefined && !args.format) throw new StoreError('invalid', 'format is required with content')
+            if (args.brand && args.format && args.format !== 'html' && args.format !== 'slides') throw new StoreError('invalid', BRAND_FORMATS)
             const { success } = await env.PUBLISH_LIMITER.limit({ key: user.email })
             if (!success) throw new StoreError('invalid', 'Too many publishes in the last minute; wait a moment and retry')
+
+            let content: string
+            let format: Format
+            let baseVersion: number | undefined
+            if (args.edits) {
+                const artifact = await getOwnedArtifact(env, args.artifact_id!, user)
+                const latest = await getVersion(env, artifact.id, artifact.latest_version)
+                const current = latest && (await getContent(env, latest))
+                if (!latest || current == null) throw new StoreError('not_found', 'The latest version has no content')
+                try {
+                    content = applyEdits(current, args.edits)
+                } catch (error) {
+                    if (error instanceof EditError) throw new StoreError('invalid', `${error.message}. Nothing was published.`)
+                    throw error
+                }
+                format = args.format ?? latest.format
+                baseVersion = latest.version
+            } else {
+                content = args.content!
+                format = args.format!
+            }
+            if (args.brand) {
+                if (format !== 'html' && format !== 'slides') {
+                    throw new StoreError('invalid', BRAND_FORMATS)
+                }
+                content = applyBrand(content)
+            }
+
             const { artifact, version } = await publish(env, user, {
                 artifactId: args.artifact_id,
                 title: args.title,
                 description: args.description,
-                content: args.content,
-                format: args.format,
+                content,
+                format,
                 note: args.note,
                 visibility: args.visibility,
                 invited: args.invited_emails,
                 folder: args.folder,
+                baseVersion,
             })
             track(env, ctx, 'artifact published', user, {
                 artifact_id: artifact.id,
@@ -183,6 +235,9 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
                 size_bytes: version.size,
                 visibility: artifact.visibility,
                 has_note: !!args.note,
+                is_edit: !!args.edits,
+                edit_count: args.edits?.length,
+                is_branded: !!args.brand,
                 has_folder: !!artifact.folder,
                 source: 'mcp',
             })
@@ -353,7 +408,7 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
         {
             title: 'Apply PostHog branding',
             description:
-                'Make an artifact you own follow the PostHog brandbook (brand.posthog.com). For an html or slides artifact, publishes a new version of the latest one with the RoundHog typeface and the PostHog colour variables added, and returns the brand guidelines (palette, logo files, illustrations) so you can finish the job by editing the content and publishing again. Markdown artifacts already render in PostHog typography, so for those it changes nothing and only returns the guidelines. Pass the artifact you are working on. Visibility is unchanged.',
+                'Make an artifact you already published follow the PostHog brandbook (brand.posthog.com). For new content, use brand: true on publish_artifact instead, which does it in one publish. For an html or slides artifact, publishes a new version of the latest one with the RoundHog typeface and the PostHog colour variables added, and returns the brand guidelines (palette, logo files, illustrations) so you can finish the job with edits on publish_artifact. Markdown artifacts already render in PostHog typography, so for those it changes nothing and only returns the guidelines. Pass the artifact you are working on. Visibility is unchanged.',
             inputSchema: z.object({ artifact_id: artifactId }),
             annotations: { destructiveHint: false, idempotentHint: true },
         },
@@ -375,6 +430,7 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
                 content: applyBrand(content),
                 format: latest.format,
                 note: 'Applied PostHog brand layer (RoundHog typeface, brand colours)',
+                baseVersion: latest.version,
             })
             track(env, ctx, 'artifact branded', user, { artifact_id: artifact.id, version: version.version, format: version.format, source: 'mcp' })
             return { ...describe(env, updated), applied: true, version: describeVersion(version), guidelines: BRAND_GUIDELINES }
