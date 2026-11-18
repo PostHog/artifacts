@@ -15,6 +15,7 @@ export interface Artifact {
     latest_version: number
     /** 1 when the owner has turned comments on. */
     comments_enabled: number
+    folder: string | null
     created_at: number
     updated_at: number
 }
@@ -133,14 +134,90 @@ export async function getOwnedArtifact(env: AppEnv, id: string, user: User): Pro
 export async function listArtifacts(
     env: AppEnv,
     user: User,
-    { limit = 50, before }: { limit?: number; before?: number } = {}
+    { limit = 50, before, folder }: { limit?: number; before?: number; folder?: string | null } = {}
 ): Promise<Artifact[]> {
+    const filter = folder === undefined ? '' : folder === null ? 'AND folder IS NULL' : 'AND folder = ?'
     const { results } = await env.DB.prepare(
-        'SELECT * FROM artifacts WHERE owner_email = ? AND updated_at < ? ORDER BY updated_at DESC LIMIT ?'
+        `SELECT * FROM artifacts WHERE owner_email = ? AND updated_at < ? ${filter} ORDER BY updated_at DESC LIMIT ?`
     )
-        .bind(user.email.toLowerCase(), before ?? Number.MAX_SAFE_INTEGER, Math.min(Math.max(limit, 1), 200))
+        .bind(
+            user.email.toLowerCase(),
+            before ?? Number.MAX_SAFE_INTEGER,
+            ...(typeof folder === 'string' ? [folder] : []),
+            Math.min(Math.max(limit, 1), 200)
+        )
         .all<Artifact>()
     return results
+}
+
+export const MAX_FOLDER_LENGTH = 100
+
+export interface FolderSummary {
+    name: string
+    count: number
+}
+
+export interface FolderIndex {
+    folders: FolderSummary[]
+    total: number
+    unfiled: number
+}
+
+export function cleanFolder(raw: string): string | null {
+    const name = raw
+        .replace(/\s+/g, ' ')
+        .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, '')
+        .trim()
+    if (!name) return null
+    if (name.length > MAX_FOLDER_LENGTH) throw new StoreError('invalid', `Folder names are limited to ${MAX_FOLDER_LENGTH} characters`)
+    return name
+}
+
+const moveStatement = (env: AppEnv, email: string, id: string, folder: string | null) =>
+    env.DB.prepare(
+        'UPDATE artifacts SET folder = COALESCE((SELECT folder FROM artifacts WHERE owner_email = ?1 AND folder = ?2 AND id != ?3 LIMIT 1), ?2) WHERE id = ?3 AND owner_email = ?1'
+    ).bind(email, folder, id)
+
+export async function listFolders(env: AppEnv, user: User): Promise<FolderIndex> {
+    const email = user.email.toLowerCase()
+    const [grouped, totals] = await Promise.all([
+        env.DB.prepare('SELECT folder AS name, COUNT(*) AS count FROM artifacts WHERE owner_email = ? AND folder IS NOT NULL GROUP BY folder ORDER BY folder')
+            .bind(email)
+            .all<FolderSummary>(),
+        env.DB.prepare('SELECT COUNT(*) AS total, COUNT(folder) AS filed FROM artifacts WHERE owner_email = ?').bind(email).first<{ total: number; filed: number }>(),
+    ])
+    const total = totals?.total ?? 0
+    return { folders: grouped.results, total, unfiled: total - (totals?.filed ?? 0) }
+}
+
+export async function setFolder(env: AppEnv, user: User, id: string, folder: string): Promise<Artifact> {
+    const name = cleanFolder(folder)
+    await getOwnedArtifact(env, id, user)
+    await moveStatement(env, user.email.toLowerCase(), id, name).run()
+    return (await getArtifact(env, id))!
+}
+
+export async function renameFolder(env: AppEnv, user: User, from: string, to: string): Promise<string> {
+    const source = cleanFolder(from)
+    const target = cleanFolder(to)
+    if (!source || !target) throw new StoreError('invalid', 'A folder name is required')
+    const email = user.email.toLowerCase()
+    const { meta } = await env.DB.prepare(
+        'UPDATE artifacts SET folder = COALESCE((SELECT folder FROM artifacts WHERE owner_email = ?1 AND folder = ?3 AND folder != ?2 LIMIT 1), ?3) WHERE owner_email = ?1 AND folder = ?2'
+    )
+        .bind(email, source, target)
+        .run()
+    if (!meta.changes) throw new StoreError('not_found', 'No folder by that name')
+    const row = await env.DB.prepare('SELECT folder FROM artifacts WHERE owner_email = ? AND folder = ? LIMIT 1').bind(email, target).first<{ folder: string }>()
+    return row?.folder ?? target
+}
+
+export async function removeFolder(env: AppEnv, user: User, name: string): Promise<number> {
+    const folder = cleanFolder(name)
+    if (!folder) throw new StoreError('invalid', 'A folder name is required')
+    const { meta } = await env.DB.prepare('UPDATE artifacts SET folder = NULL WHERE owner_email = ? AND folder = ?').bind(user.email.toLowerCase(), folder).run()
+    if (!meta.changes) throw new StoreError('not_found', 'No folder by that name')
+    return meta.changes
 }
 
 export async function listVersions(env: AppEnv, id: string, limit = -1): Promise<Version[]> {
@@ -169,6 +246,7 @@ interface PublishInput {
     visibility?: Visibility
     /** Allowlist for visibility 'invited'. Replaces the existing list when given. */
     invited?: string[]
+    folder?: string
 }
 
 /**
@@ -193,6 +271,7 @@ export async function publish(env: AppEnv, user: User, input: PublishInput): Pro
     }
     const title = input.title?.trim().slice(0, MAX_TITLE_LENGTH)
     const invites = input.invited ? normalizeInvites(input.invited) : undefined
+    const folder = input.folder === undefined ? undefined : cleanFolder(input.folder)
     if (input.visibility === 'invited' && !invites?.length && !input.artifactId) {
         throw new StoreError('invalid', 'Visibility "invited" needs at least one email or domain in invited_emails')
     }
@@ -214,6 +293,7 @@ export async function publish(env: AppEnv, user: User, input: PublishInput): Pro
                 'INSERT INTO versions (artifact_id, version, format, size, sha256, object_key, note, created_at) VALUES (?, 1, ?, ?, ?, ?, ?, ?)'
             ).bind(id, input.format, bytes.byteLength, sha256, key, input.note ?? null, now),
             ...(invites ? replaceInvitesStatements(env, id, invites) : []),
+            ...(folder ? [moveStatement(env, email, id, folder)] : []),
         ]))
         return {
             artifact: (await getArtifact(env, id))!,
@@ -244,7 +324,11 @@ export async function publish(env: AppEnv, user: User, input: PublishInput): Pro
                 ).bind(next, now, title || null, input.description ?? null, input.visibility ?? null, artifact.id, artifact.latest_version),
             ])
             if (update?.meta.changes === 1) {
-                if (invites) await env.DB.batch(replaceInvitesStatements(env, artifact.id, invites))
+                const after = [
+                    ...(invites ? replaceInvitesStatements(env, artifact.id, invites) : []),
+                    ...(folder !== undefined ? [moveStatement(env, email, artifact.id, folder)] : []),
+                ]
+                if (after.length) await env.DB.batch(after)
                 return {
                     artifact: (await getArtifact(env, artifact.id))!,
                     version: (await getVersion(env, artifact.id, next))!,

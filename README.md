@@ -1,12 +1,12 @@
 # PostHog Artifacts
 
-`artifacts.posthog.com` hosts content made in Claude sessions, such as reports, write-ups and HTML pages, behind unguessable share links. The design is MCP first: agents publish, update, share and delete artifacts through an MCP server. The web UI is a viewer, and its only management feature is the Share button.
+`artifacts.posthog.com` hosts content made in Claude sessions, such as reports, write-ups and HTML pages, behind unguessable share links. The design is MCP first: agents publish, update, share and delete artifacts through an MCP server. The web UI is a viewer. Its management features are the Share button and the folders on the artifacts page.
 
 ## How it works
 
 ```
                        ┌───────────────── Cloudflare Worker (artifacts.posthog.com) ─────────────────┐
-Claude Code ── MCP ──▶ │ /mcp            OAuth-protected MCP server (8 tools)                        │
+Claude Code ── MCP ──▶ │ /mcp            OAuth-protected MCP server (10 tools)                       │
   (OAuth, DCR/CIMD)    │ /authorize      consent page → Sign in with PostHog (@posthog.com)       │
                        │ /oauth/*        token + client registration (workers-oauth-provider)        │
 Browser ─────────────▶ │ /a/:id          viewer: PostHog-branded chrome + sandboxed iframe           │
@@ -69,6 +69,17 @@ The owner can turn comments on for an artifact (off by default, so nothing alrea
 - **On a passage:** select text in the artifact and a **Comment** button appears next to the selection. Pressing it opens the panel with the passage quoted above the box. Commented passages are highlighted in the artifact; clicking one jumps to its comment, and clicking a comment's quote scrolls the passage into view (and switches slide, in a deck). Works for HTML, Markdown and slides, on the latest version while comments are on. Passages are stored as the quoted text plus up to 64 characters either side, not a DOM position, so when the author publishes a new version a comment whose text has gone shows "Can't find this text in this version" instead of pointing at the wrong place. Highlighting uses the CSS Custom Highlight API, so a browser without it still gets the button, quotes and comments but no highlight.
 - **Not included:** replies, edits and notifications. Claude can read comments, with the quoted text as `on_text`, using `list_comments`.
 
+### Folders
+
+The owner can file each artifact in one folder. Folders are flat, and an artifact is in one folder or in none (Unfiled).
+
+- **Who sees them:** only the owner. A folder never changes who can view an artifact, and the viewer page never shows the folder name.
+- **The artifacts page:** chips filter the list by folder (`/?folder=<name>`) or show the unfiled artifacts (`/?unfiled=1`). The chips and the Folder column appear only when at least one folder exists. Each row has a **Move** menu, and a folder view has **Rename** and **Remove folder**. The controls are forms that post and reload the page.
+- **Names:** a name is 1 to 100 characters after trimming, and runs of whitespace become one space. Names match without regard to ASCII case, so `acme` goes into an existing `Acme` folder and keeps that casing.
+- **Lifetime:** a folder exists while it holds at least one artifact, so a move into a new name makes the folder. A rename into the name of another folder merges the two. **Remove folder** moves its artifacts to Unfiled and deletes no artifact.
+- **Order:** a move, a rename or a removal does not change `updated_at`, so the list order stays the same.
+- **Agents:** `publish_artifact` and `update_artifact` take `folder` (`""` moves the artifact out of its folder), `list_artifacts` filters by `folder`, and `list_folders` returns the names with their counts.
+
 ### Open in Claude Code or Codex
 
 Anyone who can view an artifact (the owner, staff, invited guests, public viewers) can hand it to a coding agent from the **Open in agent** button in the viewer bar. It offers:
@@ -88,11 +99,12 @@ Each fills in a prompt without sending it. The prompt names the artifact and its
 
 | Tool | Purpose |
 |---|---|
-| `publish_artifact` | Create an artifact (HTML or Markdown), or add a version with `artifact_id`. Private unless `visibility` is `"team"`, `"invited"` (with `invited_emails`) or `"public"`. |
-| `list_artifacts` | Your artifacts, newest first. |
+| `publish_artifact` | Create an artifact (HTML or Markdown), or add a version with `artifact_id`. Private unless `visibility` is `"team"`, `"invited"` (with `invited_emails`) or `"public"`. `folder` files it in a folder. |
+| `list_artifacts` | Your artifacts, newest first. `folder` filters by folder, and `""` lists the unfiled ones. |
+| `list_folders` | Your folders with their artifact counts, and the count of unfiled artifacts. |
 | `get_artifact` | Metadata, version history, and optionally a version's content. |
 | `set_visibility` | `private`, `team`, `invited` (with `invited_emails`, which replaces the list) or `public`. |
-| `update_artifact` | Rename, change the description, or turn comments on or off (`comments_enabled`). |
+| `update_artifact` | Rename, change the description, move to a folder (`folder`), or turn comments on or off (`comments_enabled`). |
 | `brand_artifact` | Make an artifact you own follow the [PostHog brandbook](https://brand.posthog.com/llms.txt): adds the RoundHog typeface and brand colour variables to the latest HTML or slides version (as a new version) and returns the palette, logo and illustration guidelines for the agent to finish with. |
 | `list_comments` | Comments on an artifact you own: author, email, staff or guest, version, text. |
 | `delete_artifact` | Permanent delete. |
@@ -160,9 +172,9 @@ Server-side events go to [project 2](https://us.posthog.com/project/2) via `post
 
 | Event | When | Key properties |
 |---|---|---|
-| `artifact published` | `publish_artifact` | `artifact_id`, `version`, `is_new_artifact`, `format`, `size_bytes`, `visibility` |
+| `artifact published` | `publish_artifact` | `artifact_id`, `version`, `is_new_artifact`, `format`, `size_bytes`, `visibility`, `has_folder` |
 | `artifact visibility changed` | `set_visibility` or the Share button | `artifact_id`, `visibility`, `source` |
-| `artifact details updated` | `update_artifact` | `artifact_id`, `is_title_changed`, `is_description_changed` |
+| `artifact details updated` | `update_artifact`, or **Move** on the artifacts page | `artifact_id`, `is_title_changed`, `is_description_changed`, `is_folder_changed` |
 | `artifact deleted` | `delete_artifact` | `artifact_id` |
 | `artifact viewed` | viewer page loads, once access is granted | `artifact_id`, `artifact_owner`, `author_name`, `artifact_title`, `is_owner`, `version`, `access`, `viewer_type` |
 | `artifact sent to agent` | an agent downloads a handover link | `artifact_id`, `version`, `format`, `access`, `target` (`claude_code`, `codex`, `copy`) |
