@@ -49,7 +49,7 @@ export function pageCsp(env: AppEnv, contentOrigin: string): string {
     return [
         "default-src 'none'",
         "script-src 'self'",
-        // RoundHog is linked from the brandbook, not copied here: its licence doesn't allow redistributing the files.
+        // RoundHog is linked from the brandbook (see ROUNDHOG_STYLESHEET, pinned with SRI).
         "style-src 'self' https://brand.posthog.com",
         "font-src https://brand.posthog.com",
         "img-src 'self' data:",

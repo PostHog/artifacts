@@ -17,6 +17,16 @@ const FRAME_TOKEN_TTL = 60 * 10
  */
 export const SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-downloads'
 
+/**
+ * RoundHog is linked from the brandbook, not copied here: its licence doesn't allow redistributing the files.
+ * The stylesheet is pinned with Subresource Integrity so brand.posthog.com can only ever hand us the
+ * @font-face rules we reviewed, never CSS that restyles or reads our pages (the OAuth consent page included).
+ * When the brandbook changes the file the hash stops matching and pages fall back to system fonts until it is
+ * refreshed: curl -s https://brand.posthog.com/fonts/roundhog.css | openssl dgst -sha384 -binary | base64
+ */
+export const ROUNDHOG_STYLESHEET =
+    '<link rel="stylesheet" href="https://brand.posthog.com/fonts/roundhog.css" integrity="sha384-yPQ0KKBngwWF5Y3GeBN9xLGWGgEUvu6d2MfyWvIiOKlffphiEOHyHRtLkXvYBUta" crossorigin="anonymous">'
+
 /** What the viewer page decided: which version, and on what grounds. Shared by iframe and agent grants. */
 interface AccessGrant {
     id: string
@@ -187,7 +197,7 @@ export function renderMarkdown(markdown: string): string {
     return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <base target="_blank">
-<link rel="stylesheet" href="https://brand.posthog.com/fonts/roundhog.css">
+${ROUNDHOG_STYLESHEET}
 <style>${MARKDOWN_CSS}</style></head>
 <body><article>${marked.parse(markdown, { async: false })}</article></body></html>`
 }
