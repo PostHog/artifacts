@@ -143,7 +143,11 @@ async function mcp(method, params) {
     return json.result
 }
 const call = async (name, args) => {
-    const result = await mcp('tools/call', { name, arguments: args })
+    let result = await mcp('tools/call', { name, arguments: args })
+    for (let waits = 0; waits < 2 && result.isError && /Too many publishes/.test(result.content?.[0]?.text ?? ''); waits++) {
+        await new Promise((resolve) => setTimeout(resolve, 61_000))
+        result = await mcp('tools/call', { name, arguments: args })
+    }
     assert.ok(!result.isError, `${name}: ${result.content?.[0]?.text}`)
     return result.structuredContent ?? JSON.parse(result.content[0].text)
 }
