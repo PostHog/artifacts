@@ -169,6 +169,11 @@ interface PublishInput {
     visibility?: Visibility
     /** Allowlist for visibility 'invited'. Replaces the existing list when given. */
     invited?: string[]
+    /**
+     * The version the content was derived from (edits, brand layer). Publishing fails instead of retrying if
+     * another version landed since, so a change derived from an old version never silently replaces a newer one.
+     */
+    baseVersion?: number
 }
 
 /**
@@ -224,6 +229,9 @@ export async function publish(env: AppEnv, user: User, input: PublishInput): Pro
     // Optimistic concurrency: retry if another publish claimed the same version number.
     for (let attempt = 0; attempt < 3; attempt++) {
         const artifact = await getOwnedArtifact(env, input.artifactId, user)
+        if (input.baseVersion !== undefined && artifact.latest_version !== input.baseVersion) {
+            throw new StoreError('conflict', `Version ${artifact.latest_version} was published after version ${input.baseVersion}, which this change was based on; retry against the latest version`)
+        }
         if (input.visibility === 'invited' && !invites?.length && !(await listInvites(env, artifact.id)).length) {
             throw new StoreError('invalid', 'Visibility "invited" needs at least one email or domain in invited_emails')
         }

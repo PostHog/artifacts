@@ -190,6 +190,31 @@ assert.equal(got.versions.length, 2)
 assert.match(got.content, /Version one/)
 step('list + get (with v1 content)')
 
+// Edits and brand on publish_artifact
+const callError = async (name, args) => {
+    const result = await mcp('tools/call', { name, arguments: args })
+    assert.ok(result.isError, `${name} should fail`)
+    return result.content[0].text
+}
+const ed = await call('publish_artifact', { title: 'Edits', format: 'html', brand: true, content: '<!doctype html><html><head><title>t</title></head><body><h1>Draft</h1><p>one</p></body></html>' })
+let edGot = await call('get_artifact', { artifact_id: ed.id, include_content: true })
+assert.match(edGot.content, /data-posthog-brand[\s\S]*<\/head>/, 'brand: true adds the layer at publish time')
+const ed2 = await call('publish_artifact', { artifact_id: ed.id, edits: [{ old_text: 'Draft', new_text: 'Final' }, { old_text: '<p>one</p>', new_text: '<p>one</p><p>two</p>' }], note: 'edit' })
+assert.equal(ed2.latest_version, 2)
+assert.equal(ed2.version.format, 'html', 'edits keep the latest format')
+edGot = await call('get_artifact', { artifact_id: ed.id, include_content: true })
+assert.match(edGot.content, /<h1>Final<\/h1><p>one<\/p><p>two<\/p>/)
+assert.equal(edGot.content.match(/data-posthog-brand/g).length, 3, 'brand layer kept once, not duplicated')
+assert.match(await callError('publish_artifact', { artifact_id: ed.id, edits: [{ old_text: 'Final', new_text: 'x' }, { old_text: 'nope', new_text: 'y' }] }), /edits\[1\]: old_text was not found.*Nothing was published/)
+assert.match(await callError('publish_artifact', { artifact_id: ed.id, edits: [{ old_text: '<p>', new_text: 'x' }] }), /more than once/)
+assert.match(await callError('publish_artifact', { artifact_id: ed.id, format: 'html', content: '<p>x</p>', edits: [{ old_text: 'a', new_text: 'b' }] }), /either content or edits/)
+assert.match(await callError('publish_artifact', { title: 'No id', edits: [{ old_text: 'a', new_text: 'b' }] }), /need artifact_id/)
+assert.match(await callError('publish_artifact', { title: 'No format', content: '<p>x</p>' }), /format is required/)
+assert.match(await callError('publish_artifact', { title: 'Md brand', format: 'markdown', content: '# x', brand: true }), /brand applies to html and slides/)
+assert.equal((await call('get_artifact', { artifact_id: ed.id })).latest_version, 2, 'failed edits publish nothing')
+await call('delete_artifact', { artifact_id: ed.id })
+step('publish with brand: true, and edits against the latest version')
+
 // 7. Viewer access rules
 const anon = new Jar()
 const other = outsider // signed in as other@posthog.com
