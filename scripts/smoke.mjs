@@ -882,7 +882,11 @@ res = await request(owner, '/login?next=/%09/evil.example')
 assert.equal(res.headers.get('Location'), '/', 'tab-smuggled next is neutralised')
 res = await request(owner, '/login?next=/a/xyz%3Fv%3D1')
 assert.equal(res.headers.get('Location'), '/a/xyz?v=1', 'same-origin next still works')
-step('safeNext rejects control-character redirects')
+for (const next of ['/.//evil.example', '/..//evil.example', '/%2e//evil.example/p?x=1#y']) {
+    res = await request(owner, `/login?next=${encodeURIComponent(next)}`)
+    assert.equal(res.headers.get('Location'), '/', `dot segments cannot collapse ${next} into a scheme-relative redirect`)
+}
+step('safeNext rejects control-character and dot-segment redirects')
 
 // A token minted for one purpose can't be replayed as another (frame grant → session)
 const frameToken = decodeURIComponent(new URL(publicFrame, BASE).searchParams.get('t'))
@@ -1068,6 +1072,8 @@ assert.ok(folderPage.includes(`</span> ${acme}</h1>`), 'the folder view shows th
 const other1 = `Other ${tag}`
 res = await form(owner, `/a/${f3.id}/folder`, { folder: other1, next: 'https://evil.example/' })
 assert.equal(res.headers.get('Location'), '/', 'next stays on this site')
+res = await form(owner, `/a/${f3.id}/folder`, { folder: other1, next: '/.//evil.example' })
+assert.equal(res.headers.get('Location'), '/', 'a dot-segment next stays on this site')
 res = await form(owner, '/folders/rename', { from: other1.toLowerCase(), to: acme.toUpperCase() })
 assert.equal(res.headers.get('Location'), acmeView, 'a rename into an existing name merges and keeps its casing')
 assert.equal(await folderCount(acme), 3)

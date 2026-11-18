@@ -69,7 +69,8 @@ export function safeNext(env: AppEnv, next: string | null | undefined): string {
     try {
         const base = new URL(env.PUBLIC_URL)
         const url = new URL(next, base)
-        return url.origin === base.origin ? url.pathname + url.search + url.hash : '/'
+        const path = url.pathname + url.search + url.hash
+        return url.origin === base.origin && !path.startsWith('//') ? path : '/'
     } catch {
         return '/'
     }
