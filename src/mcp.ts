@@ -13,18 +13,22 @@ import { attemptVersions, listAttempts, parseStoredAnswers } from './quiz-store'
 import {
     type Artifact,
     MAX_CONTENT_BYTES,
+    MAX_FOLDER_LENGTH,
     StoreError,
     type Version,
+    cleanFolder,
     deleteArtifact,
     getContent,
     getOwnedArtifact,
     getVersion,
     listArtifacts,
     listComments,
+    listFolders,
     listInvites,
     listVersions,
     publish,
     setCommentsEnabled,
+    setFolder,
     setVisibility,
     shareUrl,
     updateMetadata,
@@ -32,7 +36,8 @@ import {
 
 const INSTRUCTIONS = `PostHog Artifacts hosts finished content (reports, write-ups, HTML pages, Markdown docs) at artifacts.posthog.com.
 Every artifact has an unguessable link. New artifacts are private (only the owner can see them). Visibility "team" makes the latest version viewable by anyone signed in with a @posthog.com account (signed-out visitors are asked to sign in). Visibility "invited" makes it viewable only by the emails or company domains in invited_emails: they sign in with their own PostHog account and must be on the list. Use it for customers. Visibility "public" makes it viewable by anyone with the link, including people outside PostHog. When the user says to share with colleagues or the team, use "team". When they want specific outside people (a customer) to see it, use "invited" with their addresses; use "public" only when anyone with the link should see it.
-Publishing again with an artifact_id adds a new version; only the latest version is ever shared. Prefer updating an existing artifact over creating duplicates, and send edits rather than the whole document for small changes. The publish result confirms the link, visibility and version, so there is no need to fetch an artifact back to check it.`
+Publishing again with an artifact_id adds a new version; only the latest version is ever shared. Prefer updating an existing artifact over creating duplicates, and send edits rather than the whole document for small changes. The publish result confirms the link, visibility and version, so there is no need to fetch an artifact back to check it.
+Owners can file artifacts in folders with the folder argument of publish_artifact or update_artifact. Folders only organize the owner's own list: they are private to the owner and never change who can view an artifact. Call list_folders first and reuse an existing name.`
 
 const artifactId = z.string().regex(/^[0-9A-Za-z]{22}$/).describe('The artifact ID (the last part of its URL)')
 const visibility = z
@@ -44,6 +49,10 @@ const invitedEmails = z
     .array(z.string().max(254))
     .max(50)
     .describe('Who may view an "invited" artifact: exact emails (ana@acme.com) or a whole company domain (@acme.com). Replaces the current list. Consumer domains like @gmail.com are refused.')
+const folder = z
+    .string()
+    .max(MAX_FOLDER_LENGTH)
+    .describe('The folder to file the artifact in, by name. A new name makes a new folder; names match without regard to case. "" moves it out of its folder. Only the owner sees folders.')
 
 function describe(env: AppEnv, artifact: Artifact) {
     return {
@@ -54,6 +63,7 @@ function describe(env: AppEnv, artifact: Artifact) {
         visibility: artifact.visibility,
         latest_version: artifact.latest_version,
         comments_enabled: !!artifact.comments_enabled,
+        folder: artifact.folder,
         created_at: new Date(artifact.created_at).toISOString(),
         updated_at: new Date(artifact.updated_at).toISOString(),
     }
@@ -165,6 +175,7 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
                 note: z.string().max(500).optional().describe('What changed in this version'),
                 visibility: visibility.optional(),
                 invited_emails: invitedEmails.optional(),
+                folder: folder.optional(),
             }),
             annotations: { destructiveHint: false, idempotentHint: false },
         },
@@ -213,6 +224,7 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
                 note: args.note,
                 visibility: args.visibility,
                 invited: args.invited_emails,
+                folder: args.folder,
                 baseVersion,
             })
             track(env, ctx, 'artifact published', user, {
@@ -226,6 +238,7 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
                 is_edit: !!args.edits,
                 edit_count: args.edits?.length,
                 is_branded: !!args.brand,
+                has_folder: !!artifact.folder,
                 source: 'mcp',
             })
             return { ...(await describeWithInvites(env, artifact)), version: describeVersion(version) }
@@ -240,15 +253,31 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
             inputSchema: z.object({
                 limit: z.number().int().min(1).max(200).optional(),
                 updated_before: z.string().datetime().optional().describe('Pagination cursor: updated_at of the last item seen'),
+                folder: z.string().max(MAX_FOLDER_LENGTH).optional().describe('Only the artifacts in this folder. "" lists the artifacts in no folder.'),
             }),
             annotations: { readOnlyHint: true },
         },
-        guarded(async ({ limit, updated_before }) => {
+        guarded(async ({ limit, updated_before, folder }) => {
             const artifacts = await listArtifacts(env, user, {
                 limit,
                 before: updated_before ? Date.parse(updated_before) : undefined,
+                folder: folder === undefined ? undefined : cleanFolder(folder),
             })
             return { artifacts: artifacts.map((a) => describe(env, a)) }
+        })
+    )
+
+    server.registerTool(
+        'list_folders',
+        {
+            title: 'List my folders',
+            description: 'List the folders your artifacts are in, with how many artifacts each holds, and how many artifacts are in no folder.',
+            inputSchema: z.object({}),
+            annotations: { readOnlyHint: true },
+        },
+        guarded(async () => {
+            const { folders, unfiled } = await listFolders(env, user)
+            return { folders, unfiled }
         })
     )
 
@@ -298,22 +327,26 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
         {
             title: 'Rename artifact',
             description:
-                "Change an artifact's title or description without publishing a new version, or turn comments on or off. Comments are visible to everyone who can open the artifact and is signed in (PostHog staff, and invited people), never to anonymous link viewers.",
+                "Change an artifact's title or description without publishing a new version, move it to a folder, or turn comments on or off. Moving it does not change updated_at. Comments are visible to everyone who can open the artifact and is signed in (PostHog staff, and invited people), never to anonymous link viewers.",
             inputSchema: z.object({
                 artifact_id: artifactId,
                 title: z.string().min(1).max(200).optional(),
                 description: z.string().max(1000).optional(),
                 comments_enabled: z.boolean().optional().describe('Turn comments on or off for this artifact'),
+                folder: folder.optional(),
             }),
             annotations: { idempotentHint: true },
         },
-        guarded(async ({ artifact_id, title, description, comments_enabled }) => {
-            let artifact = await updateMetadata(env, user, artifact_id, { title, description })
+        guarded(async ({ artifact_id, title, description, comments_enabled, folder }) => {
+            const touchesDetails = title !== undefined || description !== undefined || folder === undefined
+            let artifact = touchesDetails ? await updateMetadata(env, user, artifact_id, { title, description }) : await getOwnedArtifact(env, artifact_id, user)
             if (comments_enabled !== undefined) artifact = await setCommentsEnabled(env, user, artifact_id, comments_enabled)
+            if (folder !== undefined) artifact = await setFolder(env, user, artifact_id, folder)
             track(env, ctx, 'artifact details updated', user, {
                 artifact_id,
                 is_title_changed: title !== undefined,
                 is_description_changed: description !== undefined,
+                is_folder_changed: folder !== undefined,
                 comments_enabled,
                 source: 'mcp',
             })

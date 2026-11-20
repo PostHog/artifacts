@@ -336,6 +336,37 @@ table.list a { font-weight: 600; text-decoration: none; }
 table.list .num { text-align: right; white-space: nowrap; color: var(--text-muted); }
 .empty { text-align: center; padding: 40px 16px; color: var(--text-muted); }
 
+.folders { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 16px; }
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 4px 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.3;
+    text-decoration: none;
+}
+.chip:hover { color: var(--text); border-color: var(--text-muted); }
+.chip[aria-current='page'] { border-color: var(--orange); background: var(--highlight); color: var(--text); font-weight: 600; }
+.chip .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28ch; }
+.chip .count { color: var(--text-muted); font-variant-numeric: tabular-nums; font-weight: 400; }
+.page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+.page .page-head h1 { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.crumb { color: var(--text-muted); text-decoration: none; }
+.crumb-sep { color: var(--text-muted); font-weight: 400; }
+.row-actions.end { justify-content: flex-end; }
+.folder-form { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0 8px 8px; }
+.folder-form .hint { margin: 0; }
+table.list a.folder-link { font-weight: 400; color: var(--text-secondary); }
+table.list a.folder-link:hover { color: var(--link); }
+table.list td.move-cell, table.list th.move-cell { width: 1%; padding: 4px 8px; text-align: right; }
+table.list td.move-cell .panel { text-align: left; }
+
 .toast {
     position: fixed;
     bottom: 20px;

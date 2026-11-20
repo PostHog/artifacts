@@ -8,12 +8,12 @@ import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/poli
 import { type Guest, clearGuestCookie, getGuest, getGuestIdentity, guestCookie, normalizeEmail } from '../lib/guest'
 import { LoginError, beginPostHogLogin, clientMetadata, finishPostHogLogin, loginErrorMessage } from '../lib/posthog-oauth'
 import { clearSessionCookie, getUser, isAllowedEmail, isLocal, isRevoked, safeNext, serializeCookie, sessionCookie } from '../lib/session'
-import { type Commenter, StoreError, addComment, cleanAnchor, deleteComment, getArtifact, getContent, getVersion, isInvited, isOwner, listArtifacts, listComments, listInvites, listVersions, setCommentsEnabled, setVisibility, shareUrl } from '../store'
+import { type Commenter, StoreError, addComment, cleanAnchor, cleanFolder, deleteComment, getArtifact, getContent, getVersion, isInvited, isOwner, listArtifacts, listComments, listFolders, listInvites, listVersions, removeFolder, renameFolder, setCommentsEnabled, setFolder, setVisibility, shareUrl } from '../store'
 import { type AgentTarget, type FrameAccess, agentContentUrl, contentOrigin, frameUrl, serveAgentContent, serveContent } from './content'
 import { claudeCodeLink, codexLink, handoverPrompt } from './handover'
 import { QuizError, parseAnswers, parseQuiz, publicQuiz, questionStats, scoreQuiz } from '../lib/quiz'
 import { type Taker, attemptVersions, getAttempt, listAttempts, listTakerAttempts, parseStoredAnswers, recordAttempt } from '../quiz-store'
-import type { CommentsView, QuizReveal, QuizView } from './templates'
+import type { CommentsView, FolderView, QuizReveal, QuizView } from './templates'
 import { commentItemsHtml, consentPage, guestGatePage, homePage, loginPage, messagePage, quizErrorMessage, quizResultsPage, viewerPage } from './templates'
 
 type Env = { Bindings: AppEnv; Variables: { user: User | null } }
@@ -62,10 +62,70 @@ const sameOrigin = (c: Context<Env>) => {
     return !origin || origin === new URL(c.env.PUBLIC_URL).origin
 }
 
+function folderView(c: Context<Env>): FolderView {
+    if (c.req.query('unfiled') === '1') return { kind: 'unfiled' }
+    try {
+        const name = cleanFolder(c.req.query('folder') ?? '')
+        return name ? { kind: 'folder', name } : { kind: 'all' }
+    } catch {
+        return { kind: 'all' }
+    }
+}
+
 app.get('/', async (c) => {
     const user = c.get('user')
-    const artifacts = user ? await listArtifacts(c.env, user, { limit: 100 }) : []
-    return c.html(homePage({ user, artifacts, publicUrl: c.env.PUBLIC_URL }))
+    if (!user) return c.html(homePage({ user, artifacts: [], publicUrl: c.env.PUBLIC_URL }))
+    const view = folderView(c)
+    const [artifacts, folders] = await Promise.all([
+        listArtifacts(c.env, user, { limit: 100, folder: view.kind === 'all' ? undefined : view.kind === 'unfiled' ? null : view.name }),
+        listFolders(c.env, user),
+    ])
+    return c.html(homePage({ user, artifacts, folders, view, publicUrl: c.env.PUBLIC_URL }))
+})
+
+const folderFailure = (c: Context<Env>, error: unknown) => {
+    if (!(error instanceof StoreError)) throw error
+    return error.code === 'invalid' ? c.text(error.message, 400) : c.text('Not found', 404)
+}
+
+app.post('/a/:id/folder', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.text('Sign in required', 401)
+    if (!sameOrigin(c)) return c.text('Forbidden', 403)
+    const data = await c.req.formData().catch(() => new FormData())
+    try {
+        const artifact = await setFolder(c.env, user, c.req.param('id'), data.get('unfile') === '1' ? '' : String(data.get('folder') ?? ''))
+        track(c.env, c.executionCtx, 'artifact details updated', user, { artifact_id: artifact.id, is_folder_changed: true, source: 'web' }, c.req.raw)
+    } catch (error) {
+        return folderFailure(c, error)
+    }
+    return c.redirect(safeNext(c.env, String(data.get('next') ?? '/')))
+})
+
+app.post('/folders/rename', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.text('Sign in required', 401)
+    if (!sameOrigin(c)) return c.text('Forbidden', 403)
+    const data = await c.req.formData().catch(() => new FormData())
+    try {
+        const name = await renameFolder(c.env, user, String(data.get('from') ?? ''), String(data.get('to') ?? ''))
+        return c.redirect(`/?folder=${encodeURIComponent(name)}`)
+    } catch (error) {
+        return folderFailure(c, error)
+    }
+})
+
+app.post('/folders/remove', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.text('Sign in required', 401)
+    if (!sameOrigin(c)) return c.text('Forbidden', 403)
+    const data = await c.req.formData().catch(() => new FormData())
+    try {
+        await removeFolder(c.env, user, String(data.get('name') ?? ''))
+        return c.redirect('/')
+    } catch (error) {
+        return folderFailure(c, error)
+    }
 })
 
 // --- Sign-in -----------------------------------------------------------------

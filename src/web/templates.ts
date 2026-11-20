@@ -4,7 +4,7 @@ import type { HtmlEscapedString } from 'hono/utils/html'
 import type { User } from '../env'
 import type { PublicQuiz, QuestionStats, QuizQuestion } from '../lib/quiz'
 import type { QuizAttempt } from '../quiz-store'
-import type { Artifact, Comment, Commenter, Version } from '../store'
+import { type Artifact, type Comment, type Commenter, type FolderIndex, type FolderSummary, MAX_FOLDER_LENGTH, type Version } from '../store'
 import { ROUNDHOG_STYLESHEET, SANDBOX } from './content'
 
 type Html = HtmlEscapedString | Promise<HtmlEscapedString>
@@ -476,7 +476,79 @@ export function guestGatePage({ id, error, signedInAs }: { id: string; error?: s
     })
 }
 
-export function homePage({ user, artifacts, publicUrl }: { user: User | null; artifacts: Artifact[]; publicUrl: string }) {
+export type FolderView = { kind: 'all' } | { kind: 'unfiled' } | { kind: 'folder'; name: string }
+
+const foldAscii = (value: string) => value.replace(/[A-Z]/g, (ch) => ch.toLowerCase())
+
+function viewHref(view: FolderView): string {
+    if (view.kind === 'unfiled') return '/?unfiled=1'
+    if (view.kind === 'folder') return `/?folder=${encodeURIComponent(view.name)}`
+    return '/'
+}
+
+function folderChip(href: string, label: string, count: number, current: boolean) {
+    return html`<a class="chip" href="${href}" aria-current="${current ? 'page' : 'false'}"><span class="name">${label}</span><span class="count">${count}</span></a>`
+}
+
+function moveControl(artifact: Artifact, next: string) {
+    return html`<details class="pop" data-close-outside>
+      <summary class="ghost" title="Move to a folder">Move ▾</summary>
+      <div class="panel right">
+        <h3>Move “${artifact.title}”</h3>
+        <form class="folder-form" method="post" action="/a/${artifact.id}/folder">
+          <input type="hidden" name="next" value="${next}">
+          <input class="text" name="folder" list="folder-names" maxlength="${MAX_FOLDER_LENGTH}" required placeholder="Folder name" aria-label="Folder name">
+          <p class="hint">${artifact.folder ? html`Now in ${artifact.folder}. ` : ''}Pick a folder, or type a new name to make one.</p>
+          <div class="row-actions end">
+            ${artifact.folder ? html`<button class="btn secondary" type="submit" name="unfile" value="1" formnovalidate><span>Remove from folder</span></button>` : ''}
+            <button class="btn" type="submit"><span>Move</span></button>
+          </div>
+        </form>
+      </div>
+    </details>`
+}
+
+function folderActions(folder: FolderSummary) {
+    return html`<div class="row-actions">
+    <details class="pop" data-close-outside>
+      <summary class="btn secondary"><span>Rename</span></summary>
+      <div class="panel right">
+        <h3>Rename “${folder.name}”</h3>
+        <form class="folder-form" method="post" action="/folders/rename">
+          <input type="hidden" name="from" value="${folder.name}">
+          <input class="text" name="to" value="${folder.name}" maxlength="${MAX_FOLDER_LENGTH}" required aria-label="New folder name">
+          <p class="hint">Use the name of another folder to merge the two.</p>
+          <div class="row-actions end"><button class="btn" type="submit"><span>Rename</span></button></div>
+        </form>
+      </div>
+    </details>
+    <details class="pop" data-close-outside>
+      <summary class="btn secondary"><span>Remove folder</span></summary>
+      <div class="panel right">
+        <h3>Remove “${folder.name}”?</h3>
+        <form class="folder-form" method="post" action="/folders/remove">
+          <input type="hidden" name="name" value="${folder.name}">
+          <p class="hint">This moves ${folder.count === 1 ? 'its 1 artifact' : `its ${folder.count} artifacts`} to Unfiled. It deletes no artifact.</p>
+          <div class="row-actions end"><button class="btn" type="submit"><span>Remove folder</span></button></div>
+        </form>
+      </div>
+    </details>
+  </div>`
+}
+
+export function homePage({
+    user,
+    artifacts,
+    publicUrl,
+    folders = { folders: [], total: 0, unfiled: 0 },
+    view = { kind: 'all' },
+}: {
+    user: User | null
+    artifacts: Artifact[]
+    publicUrl: string
+    folders?: FolderIndex
+    view?: FolderView
+}) {
     const setup = html`<div class="card">
   <strong>Connect Claude Code</strong>
   <p class="small muted tight">Install the plugin to get the MCP server and the <code>/share-artifact</code> skill:</p>
@@ -500,32 +572,61 @@ export function homePage({ user, artifacts, publicUrl }: { user: User | null; ar
         })
     }
 
+    const current = view.kind === 'folder' ? folders.folders.find((f) => foldAscii(f.name) === foldAscii(view.name)) : undefined
+    const hasFolders = folders.folders.length > 0
+    const showFolderColumn = hasFolders && view.kind === 'all'
+    const next = viewHref(view)
+    const heading =
+        view.kind === 'all'
+            ? html`<h1>Your artifacts</h1>`
+            : html`<div class="page-head">
+    <h1><a class="crumb" href="/">Your artifacts</a> <span class="crumb-sep">/</span> ${view.kind === 'unfiled' ? 'Unfiled' : (current?.name ?? view.name)}</h1>
+    ${current ? folderActions(current) : ''}
+  </div>`
+    const empty =
+        view.kind === 'all'
+            ? html`Nothing here yet. In Claude Code, try <code>/share-artifact</code>.`
+            : view.kind === 'unfiled'
+              ? 'Every artifact is in a folder.'
+              : 'No artifacts are in this folder.'
+
     return layout({
-        title: 'Your artifacts · PostHog Artifacts',
+        title: `${current?.name ?? 'Your artifacts'} · PostHog Artifacts`,
         body: html`${appBar({ user, next: '/', actions: html`<form method="post" action="/logout"><button class="ghost" type="submit">Sign out</button></form>` })}
 <main class="page">
-  <h1>Your artifacts</h1>
-  <p class="lede">Everything you've published. Ask Claude to publish or update one, or use <code>/share-artifact</code>.</p>
+  ${heading}
+  ${view.kind === 'all' ? html`<p class="lede">Everything you've published. Ask Claude to publish or update one, or use <code>/share-artifact</code>.</p>` : ''}
+  ${hasFolders
+      ? html`<nav class="folders" aria-label="Folders">
+    ${folderChip('/', 'All', folders.total, view.kind === 'all')}
+    ${folderChip('/?unfiled=1', 'Unfiled', folders.unfiled, view.kind === 'unfiled')}
+    ${folders.folders.map((f) => folderChip(`/?folder=${encodeURIComponent(f.name)}`, f.name, f.count, f === current))}
+  </nav>`
+      : ''}
+  <datalist id="folder-names">${folders.folders.map((f) => html`<option value="${f.name}"></option>`)}</datalist>
   <div class="card flush">
   ${artifacts.length
       ? html`<table class="list">
-    <thead><tr><th>Title</th><th class="hide-sm">Access</th><th class="num hide-sm">Version</th><th class="num">Updated</th></tr></thead>
+    <thead><tr><th>Title</th>${showFolderColumn ? html`<th class="hide-sm">Folder</th>` : ''}<th class="hide-sm">Access</th><th class="num hide-sm">Version</th><th class="num">Updated</th><th class="move-cell"></th></tr></thead>
     <tbody>
     ${artifacts.map(
         (a) => html`<tr>
       <td><a href="/a/${a.id}">${a.title}</a>${a.description ? html`<div class="small muted">${a.description}</div>` : ''}</td>
+      ${showFolderColumn ? html`<td class="hide-sm">${a.folder ? html`<a class="folder-link" href="/?folder=${encodeURIComponent(a.folder)}">${a.folder}</a>` : ''}</td>` : ''}
       <td class="hide-sm">${visibilityPill(a.visibility)}</td>
       <td class="num hide-sm">v${a.latest_version}</td>
       <td class="num">${relativeTime(a.updated_at)}</td>
+      <td class="move-cell">${moveControl(a, next)}</td>
     </tr>`
     )}
     </tbody>
   </table>`
-      : html`<div class="empty">Nothing here yet. In Claude Code, try <code>/share-artifact</code>.</div>`}
+      : html`<div class="empty">${empty}</div>`}
   </div>
   <h2>Setup</h2>
   ${setup}
-</main>`,
+</main>
+<script src="/viewer.js" defer></script>`,
     })
 }
 

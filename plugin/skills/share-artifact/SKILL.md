@@ -7,7 +7,7 @@ description: Publish output from this Claude session (a report, analysis, write-
 
 Artifacts live at `artifacts.posthog.com`. Each one has an unguessable link, keeps every version, and is **private** until the owner shares it, with the **PostHog team** (anyone signed in with a @posthog.com account), with **specific people** outside PostHog (an email allowlist; they sign in with their own PostHog account), or **publicly** (anyone with the link). Only the latest version is ever visible to people it's shared with.
 
-You publish through the `posthog-artifacts` MCP server (tools: `publish_artifact`, `list_artifacts`, `get_artifact`, `set_visibility`, `update_artifact`, `brand_artifact`, `delete_artifact`). If those tools are missing, tell the user to run:
+You publish through the `posthog-artifacts` MCP server (tools: `publish_artifact`, `list_artifacts`, `list_folders`, `get_artifact`, `set_visibility`, `update_artifact`, `brand_artifact`, `delete_artifact`). If those tools are missing, tell the user to run:
 
 ```
 claude mcp add --transport http posthog-artifacts https://artifacts.posthog.com/mcp
@@ -114,5 +114,6 @@ If the user asks to brand an artifact that is already published, the quickest pa
 
 - Share or unshare: `set_visibility` with `"team"`, `"invited"` (plus `invited_emails`, which replaces the list), `"public"` or `"private"`. To add one person, send the full list again. The change takes effect immediately, and links that are already open stop working.
 - Rename: `update_artifact`.
+- File in a folder: pass `folder` to `publish_artifact` or `update_artifact`. Call `list_folders` first and reuse an existing name. `""` moves the artifact out of its folder. Folders are private to the owner and never change who can view an artifact.
 - Look at the history or an old version: `get_artifact` with `version` and `include_content: true`.
 - Delete: `delete_artifact`. It is permanent and breaks the link for everyone. Confirm with the user first, every time.

@@ -143,7 +143,11 @@ async function mcp(method, params) {
     return json.result
 }
 const call = async (name, args) => {
-    const result = await mcp('tools/call', { name, arguments: args })
+    let result = await mcp('tools/call', { name, arguments: args })
+    for (let waits = 0; waits < 2 && result.isError && /Too many publishes/.test(result.content?.[0]?.text ?? ''); waits++) {
+        await new Promise((resolve) => setTimeout(resolve, 61_000))
+        result = await mcp('tools/call', { name, arguments: args })
+    }
     assert.ok(!result.isError, `${name}: ${result.content?.[0]?.text}`)
     return result.structuredContent ?? JSON.parse(result.content[0].text)
 }
@@ -157,7 +161,7 @@ assert.equal(init.serverInfo.name, 'posthog-artifacts')
 const { tools } = await mcp('tools/list', {})
 assert.deepEqual(
     tools.map((t) => t.name).sort(),
-    ['brand_artifact', 'delete_artifact', 'get_artifact', 'list_artifacts', 'list_comments', 'publish_artifact', 'quiz_results', 'set_visibility', 'update_artifact']
+    ['brand_artifact', 'delete_artifact', 'get_artifact', 'list_artifacts', 'list_comments', 'list_folders', 'publish_artifact', 'quiz_results', 'set_visibility', 'update_artifact']
 )
 step(`MCP initialize + tools/list (${tools.length} tools)`)
 
@@ -907,7 +911,11 @@ res = await request(owner, '/login?next=/%09/evil.example')
 assert.equal(res.headers.get('Location'), '/', 'tab-smuggled next is neutralised')
 res = await request(owner, '/login?next=/a/xyz%3Fv%3D1')
 assert.equal(res.headers.get('Location'), '/a/xyz?v=1', 'same-origin next still works')
-step('safeNext rejects control-character redirects')
+for (const next of ['/.//evil.example', '/..//evil.example', '/%2e//evil.example/p?x=1#y']) {
+    res = await request(owner, `/login?next=${encodeURIComponent(next)}`)
+    assert.equal(res.headers.get('Location'), '/', `dot segments cannot collapse ${next} into a scheme-relative redirect`)
+}
+step('safeNext rejects control-character and dot-segment redirects')
 
 // A token minted for one purpose can't be replayed as another (frame grant → session)
 const frameToken = decodeURIComponent(new URL(publicFrame, BASE).searchParams.get('t'))
@@ -1046,5 +1054,75 @@ assert.match(await res.text(), /Your artifacts/, 'access restored after un-revok
 assert.equal((await request(null, rvAgent)).status, 200, 'handover link works again after un-revoking')
 await call('delete_artifact', { artifact_id: rv.id })
 step("revocation kill switch (web + MCP + the owner's content links)")
+
+const tag = randomBytes(4).toString('hex')
+const acme = `Acme ${tag}`
+const f1 = await call('publish_artifact', { title: 'Folder one', format: 'markdown', content: '# one', folder: `  ${acme}  ` })
+assert.equal(f1.folder, acme, 'publish files a new artifact under the trimmed name')
+const f2 = await call('publish_artifact', { title: 'Folder two', format: 'markdown', content: '# two', folder: acme.toUpperCase() })
+assert.equal(f2.folder, acme, 'names match without regard to case and keep the existing casing')
+const f3 = await call('publish_artifact', { title: 'Folder three', format: 'markdown', content: '# three' })
+assert.equal(f3.folder, null)
+const folderCount = async (name) => (await call('list_folders', {})).folders.find((f) => f.name === name)?.count
+assert.equal(await folderCount(acme), 2)
+assert.deepEqual((await call('list_artifacts', { folder: acme.toLowerCase() })).artifacts.map((a) => a.id).sort(), [f1.id, f2.id].sort())
+assert.ok((await call('list_artifacts', { folder: '' })).artifacts.some((a) => a.id === f3.id), '"" lists the artifacts in no folder')
+const unfiled = await call('update_artifact', { artifact_id: f1.id, folder: '' })
+assert.equal(unfiled.folder, null)
+assert.equal(unfiled.updated_at, f1.updated_at, 'a move keeps updated_at')
+assert.equal((await call('publish_artifact', { artifact_id: f1.id, format: 'markdown', content: '# one v2', folder: acme })).folder, acme, 'a new version can move it')
+assert.equal((await call('publish_artifact', { artifact_id: f1.id, format: 'markdown', content: '# one v3' })).folder, acme, 'a new version without folder keeps it')
+assert.ok((await mcp('tools/call', { name: 'update_artifact', arguments: { artifact_id: f3.id, folder: 'x'.repeat(101) } })).isError, 'long names are refused')
+step('folders: MCP files, lists and moves; names match without regard to case; a move keeps updated_at')
+
+const acmeView = `/?folder=${encodeURIComponent(acme)}`
+res = await form(other, `/a/${f1.id}/folder`, { folder: 'Mine' })
+assert.equal(res.status, 404, "another staffer cannot move your artifact")
+res = await form(other, '/folders/rename', { from: acme, to: 'Mine' })
+assert.equal(res.status, 404, "another staffer cannot rename your folder")
+res = await form(other, '/folders/remove', { name: acme })
+assert.equal(res.status, 404, "another staffer cannot remove your folder")
+assert.ok(!(await (await request(other, acmeView)).text()).includes(`/a/${f1.id}`), "another staffer's folder view does not list your artifacts")
+res = await form(owner, `/a/${f3.id}/folder`, { folder: acme }, { 'Sec-Fetch-Site': 'cross-site' })
+assert.equal(res.status, 403, 'cross-site move refused')
+res = await form(anon, `/a/${f3.id}/folder`, { folder: acme })
+assert.equal(res.status, 401, 'signed-out move refused')
+await call('set_visibility', { artifact_id: f1.id, visibility: 'team' })
+res = await request(other, `/a/${f1.id}`)
+assert.equal(res.status, 200)
+assert.ok(!(await res.text()).includes(acme), 'viewers never see the folder name')
+assert.equal(await folderCount(acme), 2, 'refused requests changed nothing')
+step('folders: owner only, same-origin only, and never shown to viewers')
+
+res = await request(owner, `/?folder=${encodeURIComponent(acme.toLowerCase())}`)
+const folderPage = await res.text()
+assert.ok(folderPage.includes(`/a/${f1.id}`) && folderPage.includes(`/a/${f2.id}`) && !folderPage.includes(`/a/${f3.id}`), 'a folder view lists only its artifacts')
+assert.ok(folderPage.includes(`</span> ${acme}</h1>`), 'the folder view shows the stored casing')
+const other1 = `Other ${tag}`
+res = await form(owner, `/a/${f3.id}/folder`, { folder: other1, next: 'https://evil.example/' })
+assert.equal(res.headers.get('Location'), '/', 'next stays on this site')
+res = await form(owner, `/a/${f3.id}/folder`, { folder: other1, next: '/.//evil.example' })
+assert.equal(res.headers.get('Location'), '/', 'a dot-segment next stays on this site')
+res = await form(owner, '/folders/rename', { from: other1.toLowerCase(), to: acme.toUpperCase() })
+assert.equal(res.headers.get('Location'), acmeView, 'a rename into an existing name merges and keeps its casing')
+assert.equal(await folderCount(acme), 3)
+assert.equal(await folderCount(other1), undefined)
+res = await form(owner, `/a/${f3.id}/folder`, { unfile: '1', folder: acme, next: acmeView })
+assert.equal(res.headers.get('Location'), acmeView)
+assert.equal(await folderCount(acme), 2, 'unfile moves it out of its folder')
+res = await form(owner, `/a/${f3.id}/folder`, { folder: 'x'.repeat(101) })
+assert.equal(res.status, 400, 'long names are refused')
+res = await form(owner, `/a/${f3.id}/folder`, { folder: `<b>bold</b> ${tag}` })
+assert.ok((await (await request(owner, '/')).text()).includes(`&lt;b&gt;bold&lt;/b&gt; ${tag}`), 'folder names are escaped')
+const renamed = `Renamed ${tag}`
+res = await form(owner, '/folders/rename', { from: acme, to: renamed })
+assert.equal(res.headers.get('Location'), `/?folder=${encodeURIComponent(renamed)}`)
+res = await form(owner, '/folders/remove', { name: renamed.toUpperCase() })
+assert.equal(res.headers.get('Location'), '/')
+res = await form(owner, '/folders/remove', { name: renamed })
+assert.equal(res.status, 404, 'a removed folder is gone')
+assert.equal((await call('list_artifacts', { folder: '' })).artifacts.filter((a) => [f1.id, f2.id].includes(a.id)).length, 2, 'removing a folder keeps its artifacts')
+for (const f of [f1, f2, f3]) await call('delete_artifact', { artifact_id: f.id })
+step('folders: web move, merge, rename and remove; names are escaped; removing deletes no artifact')
 
 console.log('\nAll smoke checks passed.')
