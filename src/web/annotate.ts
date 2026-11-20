@@ -168,6 +168,16 @@ const SCRIPT = String.raw`(function () {
   window.addEventListener('scroll', hide, true);
   window.addEventListener('resize', hide);
 
+  // Decks often advance on any click. Releasing the mouse after dragging a selection also fires a click, which would
+  // jump to the next slide and lose the selection before "Comment" can be pressed, so that click goes no further.
+  window.addEventListener('click', function (ev) {
+    if (!canComment || !document.body || !document.body.classList.contains('ph-deck')) return;
+    var sel = window.getSelection(), t = ev.target;
+    if (!sel || sel.isCollapsed || !t || !t.closest || t.closest('a,button,input,select,textarea,summary,[role="button"]')) return;
+    try { if (!sel.containsNode(t, true)) return; } catch (e) { return; }
+    ev.stopImmediatePropagation();
+  }, true);
+
   // Clicking a highlighted passage tells the viewer which comment it belongs to.
   document.addEventListener('click', function (ev) {
     var sel = window.getSelection();
