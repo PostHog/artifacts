@@ -118,15 +118,17 @@ export function track(
     const posthog = analyticsClient(env, { geoip: !!ip })
     if (!posthog) return
     const { distinctId, properties: who } = actorFields(actor)
+    // captureImmediate resolves even when delivery fails; failures arrive on the 'error' event.
+    posthog.on('error', (error) => console.warn('posthog capture failed', event, String(error)))
     ctx.waitUntil(
         posthog
             .captureImmediate({
                 // Events attach to the staff member's existing person, but never create or change persons.
                 distinctId,
                 event,
-                properties: { ...properties, ...who, app: APP, $process_person_profile: false, ...(ip ? { $ip: ip } : {}) },
+                properties: { ...properties, ...who, app: APP, ...(ip ? { $ip: ip } : {}) },
+                options: { process_person_profile: false },
             })
-            .catch((error) => console.warn('posthog capture failed', event, String(error)))
             .finally(() => posthog.shutdown())
     )
 }

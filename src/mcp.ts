@@ -117,15 +117,16 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
             // Tool errors are expected outcomes (not found, rate limited), not exceptions for Error Tracking.
             enableExceptionAutocapture: false,
             eventProperties: () => ({ app: APP }),
-            // Staff already have profiles in project 2, so never create or update persons from here. Drop the raw
-            // request, response and error text: they carry artifact content, private links, invite lists, comments,
-            // and customer addresses echoed back in validation errors. $mcp_input_keys still records which
-            // arguments were passed, and $mcp_is_error which calls failed.
+            // Staff already have profiles in project 2, so never create or update persons from here.
+            eventOptions: () => ({ process_person_profile: false }),
+            // Drop person updates and the raw request, response and error text: they carry artifact content, private
+            // links, invite lists, comments, and customer addresses echoed back in validation errors.
+            // $mcp_input_keys still records which arguments were passed, and $mcp_is_error which calls failed.
             beforeSend: (event) => {
                 const { $set, $set_once, $mcp_parameters, $mcp_response, $mcp_error_message, ...properties } = event.properties as Record<string, unknown>
                 return {
                     ...event,
-                    properties: { ...properties, $process_person_profile: false, ...(telemetry.ip ? { $ip: telemetry.ip } : {}) },
+                    properties: { ...properties, ...(telemetry.ip ? { $ip: telemetry.ip } : {}) },
                 } as typeof event
             },
         })

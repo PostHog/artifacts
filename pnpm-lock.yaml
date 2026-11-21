@@ -15,8 +15,8 @@ importers:
         specifier: 2.4.0
         version: 2.4.0
       '@posthog/mcp':
-        specifier: 1.1.0
-        version: 1.1.0(@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.3)(zod@4.6.7))(@modelcontextprotocol/server@2.4.0)(posthog-node@5.61.2(@opentelemetry/api@1.10.0))
+        specifier: 1.6.0
+        version: 1.6.0(@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.3)(zod@4.6.7))(@modelcontextprotocol/server@2.4.0)(posthog-node@6.0.5(@opentelemetry/api@1.10.0))
       agents:
         specifier: ^0.32.0
         version: 0.32.0(@babel/core@8.0.10)(@babel/runtime@7.29.10)(@modelcontextprotocol/client@2.4.0)(@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.3)(zod@4.6.7))(@modelcontextprotocol/server@2.4.0)(rolldown@1.2.16)(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(yaml@2.9.1))(zod@4.6.7)
@@ -27,8 +27,8 @@ importers:
         specifier: ^18.1.2
         version: 18.1.2
       posthog-node:
-        specifier: ^5.61.2
-        version: 5.61.2(@opentelemetry/api@1.10.0)
+        specifier: ^6.0.5
+        version: 6.0.5(@opentelemetry/api@1.10.0)
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -593,30 +593,24 @@ packages:
   '@poppinss/exception@1.2.3':
     resolution: {integrity: sha512-dCED+QRChTVatE9ibtoaxc+WkdzOSjYTKi/+uacHWIsfodVfpsueo3+DKpgU5Px8qXjgmXkSvhXvSCz3fnP9lw==}
 
-  '@posthog/core@1.63.1':
-    resolution: {integrity: sha512-LcUSRUM8zoTdwQFH1kWDQDMOFwiFjJ2lVxOOtpOwp6ezcHdr94KjO84YcoEeYtMuIFVMjasDFWyrOuuMAAg52g==}
+  '@posthog/core@1.69.2':
+    resolution: {integrity: sha512-toMfPKklwLW+a4ZY3/EzM3GNMVXmk2ylGb8NPJXRH4igXMoI8wgNL2jqXOiglWAXqFBLZGYFN1oQx6LVmUTxTg==}
 
-  '@posthog/core@1.67.1':
-    resolution: {integrity: sha512-Fq8YySx3G2ggxKV/dLf5nfbQocB3/yU6TNSGIyRvVynizrIW8tZfB2HQ/13cY61PoU+cNzvKch+B7Ac+OUkORw==}
-
-  '@posthog/mcp@1.1.0':
-    resolution: {integrity: sha512-bdNqaRF02D/hamVxF9QUPlkNBeJCi5X3YUHYWGEQbtNZngH5hQxVkdsE8jQHt0rexZ7PVKT4Jn0GOP+E4tr9eA==}
+  '@posthog/mcp@1.6.0':
+    resolution: {integrity: sha512-3bwMcPQ9SXsTzEs+rI1ftqaFqOBIxkKV5E8PtE/cYl3TYRdfLxcJUIrak1DQscH7ZgiVRqxYvTH01bXwMxsNIw==}
     engines: {node: ^20.20.0 || >=22.22.0}
     peerDependencies:
       '@modelcontextprotocol/sdk': '>=1.26.0'
       '@modelcontextprotocol/server': '>=2.0.0'
-      posthog-node: ^5.0.0
+      posthog-node: ^5.0.0 || ^6.0.0
     peerDependenciesMeta:
       '@modelcontextprotocol/sdk':
         optional: true
       '@modelcontextprotocol/server':
         optional: true
 
-  '@posthog/types@1.419.0':
-    resolution: {integrity: sha512-XX7zRYt/vK8AzaD6V+oDquAzacZf5exJv971dja9En8Qf6g84Qvc3rpT0w6hDYYLWrjaSSkdjFfvvoXI0ouJDg==}
-
-  '@posthog/types@1.424.0':
-    resolution: {integrity: sha512-58RE0+Lt4vMLYmty2MlyAyfxFJvlM3Fp0tgRT25Klky7FSQvpznX+W9xKyVESB5oIAEJDxfHKX0cwEBHROZKqw==}
+  '@posthog/types@1.427.0':
+    resolution: {integrity: sha512-2RPVfuGIx0iys78mTOcfdzN7/w7AM1Ak3yu9++4/FonPf08mwGqDkJjThz2dA/34666ToNw5Q4fZoFdgvfNUHw==}
 
   '@rolldown/binding-android-arm-eabi@1.2.16':
     resolution: {integrity: sha512-ia3DwAs0OsMGS7+IConptSiyk9pEXkOx/AbJ2n/lAGxH3QkWQus1t8d7gnAT38FCU2sQu8lUbeR6AiZFv4JxaA==}
@@ -1432,14 +1426,17 @@ packages:
     resolution: {integrity: sha512-LJlKCCAUFKOuZxipUdYw1NzIITEsPcgyOG9LkvRJvuKj/bRzbuRY0ARXvL0pWGpsZvn8jku+LMep2eU0seHp8g==}
     engines: {node: ^10 || ^12 || >=14}
 
-  posthog-node@5.61.2:
-    resolution: {integrity: sha512-6pMhzR+APW+CBreUlHce3qrxwU7l90gYp1A5eN0kf/o3rVf++Zz2KPtZQC63ct+hWkzCwi3Arm+GT8EjUBrUag==}
+  posthog-node@6.0.5:
+    resolution: {integrity: sha512-trvLy4y6I2SDU9DOJ6vVv3n2Gw8Jp1mbbaxSGGsrgO9ihF2l4Mz/AgVVdTSV9DPv7Y+VeQnfpE6I8ipJlAMtzg==}
     engines: {node: ^20.20.0 || >=22.22.0}
     peerDependencies:
       '@opentelemetry/api': ^1.2.0
+      '@react-email/render': ^2.1.0
       rxjs: ^7.0.0
     peerDependenciesMeta:
       '@opentelemetry/api':
+        optional: true
+      '@react-email/render':
         optional: true
       rxjs:
         optional: true
@@ -2130,25 +2127,19 @@ snapshots:
 
   '@poppinss/exception@1.2.3': {}
 
-  '@posthog/core@1.63.1':
+  '@posthog/core@1.69.2':
     dependencies:
-      '@posthog/types': 1.419.0
+      '@posthog/types': 1.427.0
 
-  '@posthog/core@1.67.1':
+  '@posthog/mcp@1.6.0(@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.3)(zod@4.6.7))(@modelcontextprotocol/server@2.4.0)(posthog-node@6.0.5(@opentelemetry/api@1.10.0))':
     dependencies:
-      '@posthog/types': 1.424.0
-
-  '@posthog/mcp@1.1.0(@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.3)(zod@4.6.7))(@modelcontextprotocol/server@2.4.0)(posthog-node@5.61.2(@opentelemetry/api@1.10.0))':
-    dependencies:
-      '@posthog/core': 1.67.1
-      posthog-node: 5.61.2(@opentelemetry/api@1.10.0)
+      '@posthog/core': 1.69.2
+      posthog-node: 6.0.5(@opentelemetry/api@1.10.0)
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.32.2(@cfworker/json-schema@4.1.3)(zod@4.6.7)
       '@modelcontextprotocol/server': 2.4.0
 
-  '@posthog/types@1.419.0': {}
-
-  '@posthog/types@1.424.0': {}
+  '@posthog/types@1.427.0': {}
 
   '@rolldown/binding-android-arm-eabi@1.2.16':
     optional: true
@@ -2810,9 +2801,9 @@ snapshots:
       source-map-js: 1.2.2
     optional: true
 
-  posthog-node@5.61.2(@opentelemetry/api@1.10.0):
+  posthog-node@6.0.5(@opentelemetry/api@1.10.0):
     dependencies:
-      '@posthog/core': 1.63.1
+      '@posthog/core': 1.69.2
     optionalDependencies:
       '@opentelemetry/api': 1.10.0
 
