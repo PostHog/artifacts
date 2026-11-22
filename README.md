@@ -125,6 +125,22 @@ Each fills in a prompt without sending it. The prompt names the artifact and its
 
 Without the plugin: `claude mcp add --transport http posthog-artifacts https://artifacts.posthog.com/mcp`
 
+### Google Antigravity
+
+Install the bundled plugin directly from a local clone (`agy plugin install ./plugin`), or add the remote server to `~/.gemini/config/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "posthog-artifacts": {
+      "url": "https://artifacts.posthog.com/mcp"
+    }
+  }
+}
+```
+
+Antigravity authenticates via CIMD (`https://antigravity.google/oauth/client-metadata.json`) and redirects to `https://antigravity.google/oauth-callback`.
+
 ## Development
 
 ```sh

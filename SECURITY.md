@@ -59,7 +59,7 @@ This document covers artifacts.posthog.com: one Cloudflare Worker that does thre
 - **Optional content host.** `CONTENT_URL` must be a *different registrable domain*, such as `posthogusercontent.com`. On a `posthog.com` subdomain, content could set cookies for every posthog.com app. When `CONTENT_URL` is set, content is never served from the app origin.
 
 ### 4. MCP OAuth (we are the authorization server)
-- **Where tokens can go.** MCP clients may only send tokens to loopback addresses (Claude Code and other local clients) or to hosts in `MCP_REDIRECT_HOSTS` (default `claude.ai,claude.com`). This is enforced at both registration and `/authorize`.
+- **Where tokens can go.** MCP clients may only send tokens to loopback addresses (Claude Code and other local clients), to hosts in `MCP_REDIRECT_HOSTS` (default `claude.ai,claude.com`), or to exact `https:` callback URIs (origin + pathname, no query) in `MCP_REDIRECT_URIS` (currently `https://antigravity.google/oauth-callback` for Google Antigravity). This is enforced at both registration and `/authorize`, and mirrored in `pageCsp`'s `form-action`.
 - **No self-hosted client IDs.** Client metadata documents hosted on our own domains are refused, so the consent page can never say "Published by artifacts.posthog.com" for a client that an artifact author controls.
 - **Consent page protections.** The consent page is bound to the browser, single-use and impossible to frame (library helpers). The consent POST must be same-origin. Remembered consent is per user, client, redirect URI and resource.
 - **Registration rate limit.** Dynamic client registration is limited to 10 per minute per IP.
