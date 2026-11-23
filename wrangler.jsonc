@@ -25,6 +25,9 @@
     "POSTHOG_EU_OAUTH_HOST": "https://eu.posthog.com",
     // https hosts MCP clients may receive tokens at, besides loopback (Claude Code etc.). See src/lib/policy.ts.
     "MCP_REDIRECT_HOSTS": "claude.ai,claude.com",
+    // Exact https callback URIs (origin + pathname, no query) MCP clients may receive tokens at.
+    // Google Antigravity uses CIMD (https://antigravity.google/oauth/client-metadata.json) with this callback.
+    "MCP_REDIRECT_URIS": "https://antigravity.google/oauth-callback",
     // Only honoured when PUBLIC_URL is localhost, so it can't be switched on in production.
     "DEV_LOGIN": "false",
     // Usage analytics go to project 2. Project tokens are public. "" turns analytics off.

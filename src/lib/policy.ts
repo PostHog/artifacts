@@ -2,7 +2,9 @@ import type { AppEnv } from '../env'
 
 /**
  * Where MCP OAuth clients may receive tokens. Loopback covers local clients (Claude Code, Cursor,
- * MCP Inspector); MCP_REDIRECT_HOSTS lists hosted clients (claude.ai connectors by default).
+ * MCP Inspector); MCP_REDIRECT_HOSTS lists hosted client domains (claude.ai connectors by default);
+ * MCP_REDIRECT_URIS lists exact https callback URIs (origin + pathname, no query) such as Google
+ * Antigravity's https://antigravity.google/oauth-callback.
  *
  * Without this, anyone can register a client (DCR or CIMD) that sends tokens to their own server and
  * phish a staffer into clicking Allow: the consent page warns, but a policy beats a warning.
@@ -12,6 +14,23 @@ function allowedRedirectHosts(env: AppEnv): string[] {
         .split(',')
         .map((h) => h.trim().toLowerCase())
         .filter(Boolean)
+}
+
+function allowedRedirectUris(env: AppEnv): string[] {
+    const out: string[] = []
+    for (const raw of (env.MCP_REDIRECT_URIS || '').split(',')) {
+        const trimmed = raw.trim()
+        if (!trimmed) continue
+        try {
+            const url = new URL(trimmed)
+            if (url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash) {
+                out.push(url.origin + url.pathname)
+            }
+        } catch {
+            // Ignore malformed entries rather than widening the allowlist.
+        }
+    }
+    return out
 }
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
@@ -25,6 +44,7 @@ export function isAllowedRedirectUri(env: AppEnv, uri: string): boolean {
     }
     if (url.username || url.password || url.hash) return false
     if (LOOPBACK.has(url.hostname)) return url.protocol === 'http:' || url.protocol === 'https:'
+    if (url.protocol === 'https:' && !url.search && allowedRedirectUris(env).includes(url.origin + url.pathname)) return true
     return url.protocol === 'https:' && allowedRedirectHosts(env).includes(url.hostname)
 }
 
@@ -45,7 +65,14 @@ export function isSelfHostedClientId(env: AppEnv, clientId: string): boolean {
 export function pageCsp(env: AppEnv, contentOrigin: string): string {
     // form-action also governs the redirect after the consent form posts, so it must include where
     // MCP clients receive their authorization code.
-    const formTargets = ["'self'", 'http://localhost:*', 'http://127.0.0.1:*', 'http://[::1]:*', ...allowedRedirectHosts(env).map((h) => `https://${h}`)]
+    const formTargets = [
+        "'self'",
+        'http://localhost:*',
+        'http://127.0.0.1:*',
+        'http://[::1]:*',
+        ...allowedRedirectHosts(env).map((h) => `https://${h}`),
+        ...allowedRedirectUris(env),
+    ]
     return [
         "default-src 'none'",
         "script-src 'self'",
