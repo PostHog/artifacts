@@ -24,7 +24,8 @@
     // Invited viewers (customers) may also sign in with an EU Cloud account. Staff cannot.
     "POSTHOG_EU_OAUTH_HOST": "https://eu.posthog.com",
     // https hosts MCP clients may receive tokens at, besides loopback (Claude Code etc.). See src/lib/policy.ts.
-    "MCP_REDIRECT_HOSTS": "claude.ai,claude.com",
+    // us.posthog.com is PostHog's own MCP connections (Settings > MCP servers), which scouts and agent runs use.
+    "MCP_REDIRECT_HOSTS": "claude.ai,claude.com,us.posthog.com",
     // Only honoured when PUBLIC_URL is localhost, so it can't be switched on in production.
     "DEV_LOGIN": "false",
     // Usage analytics go to project 2. Project tokens are public. "" turns analytics off.
