@@ -8,9 +8,10 @@ import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/poli
 import { type Guest, clearGuestCookie, getGuest, getGuestIdentity, guestCookie, normalizeEmail } from '../lib/guest'
 import { LoginError, beginPostHogLogin, clientMetadata, finishPostHogLogin, loginErrorMessage } from '../lib/posthog-oauth'
 import { clearSessionCookie, getUser, isAllowedEmail, isLocal, isRevoked, safeNext, serializeCookie, sessionCookie } from '../lib/session'
-import { type Commenter, StoreError, addComment, cleanAnchor, cleanFolder, deleteComment, getArtifact, getContent, getVersion, isInvited, isOwner, listArtifacts, listComments, listFolders, listInvites, listVersions, removeFolder, renameFolder, setCommentsEnabled, setFolder, setVisibility, shareUrl } from '../store'
+import { type Commenter, MAX_CONTENT_BYTES, StoreError, addComment, cleanAnchor, cleanFolder, deleteComment, getArtifact, getContent, getVersion, isInvited, isOwner, listArtifacts, listComments, listFolders, listInvites, listVersions, publish, removeFolder, renameFolder, setCommentsEnabled, setFolder, setVisibility, shareUrl } from '../store'
 import { type AgentTarget, type FrameAccess, agentContentUrl, contentOrigin, frameUrl, serveAgentContent, serveContent } from './content'
 import { claudeCodeLink, codexLink, handoverPrompt } from './handover'
+import { UploadError, decodeUpload, formatFromFilename, isFormat, titleFromFilename } from '../lib/upload'
 import { QuizError, parseAnswers, parseQuiz, publicQuiz, questionStats, scoreQuiz } from '../lib/quiz'
 import { type Taker, attemptVersions, getAttempt, listAttempts, listTakerAttempts, parseStoredAnswers, recordAttempt } from '../quiz-store'
 import type { CommentsView, FolderView, QuizReveal, QuizView } from './templates'
@@ -125,6 +126,59 @@ app.post('/folders/remove', async (c) => {
         return c.redirect('/')
     } catch (error) {
         return folderFailure(c, error)
+    }
+})
+
+// Form bodies add multipart framing to the file, so allow some slack over the content limit.
+const MAX_UPLOAD_REQUEST_BYTES = MAX_CONTENT_BYTES + 64 * 1024
+
+const uploadFailure = (c: Context<Env>, message: string, status: 400 | 413 | 429) =>
+    c.html(messagePage({ user: c.get('user'), title: 'Upload failed', message, status }), status)
+
+app.post('/upload', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.text('Sign in required', 401)
+    if (!sameOrigin(c)) return c.text('Forbidden', 403)
+    if (Number(c.req.header('Content-Length')) > MAX_UPLOAD_REQUEST_BYTES) {
+        return uploadFailure(c, `The file is too large; the limit is ${MAX_CONTENT_BYTES / (1024 * 1024)} MB.`, 413)
+    }
+    const data = await c.req.formData().catch(() => new FormData())
+    const file = data.get('file')
+    if (!(file instanceof File) || !file.name) return uploadFailure(c, 'Choose a file to upload.', 400)
+    if (file.size > MAX_CONTENT_BYTES) return uploadFailure(c, `The file is too large; the limit is ${MAX_CONTENT_BYTES / (1024 * 1024)} MB.`, 413)
+
+    const chosen = String(data.get('format') ?? '')
+    const format = isFormat(chosen) ? chosen : formatFromFilename(file.name)
+    if (!format) return uploadFailure(c, 'Could not tell the format from the file name. Use .html, .md or .json, or choose a format.', 400)
+    const title = String(data.get('title') ?? '').trim() || titleFromFilename(file.name)
+    const folder = String(data.get('folder') ?? '')
+
+    const { success } = await c.env.PUBLISH_LIMITER.limit({ key: user.email })
+    if (!success) return uploadFailure(c, 'Too many publishes in the last minute; wait a moment and try again.', 429)
+
+    try {
+        const { artifact, version } = await publish(c.env, user, {
+            title,
+            content: decodeUpload(await file.arrayBuffer()),
+            format,
+            folder: folder || undefined,
+        })
+        track(c.env, c.executionCtx, 'artifact published', user, {
+            artifact_id: artifact.id,
+            version: version.version,
+            is_new_artifact: true,
+            format: version.format,
+            size_bytes: version.size,
+            visibility: artifact.visibility,
+            has_folder: !!artifact.folder,
+            source: 'web',
+        }, c.req.raw)
+        return c.redirect(`/a/${artifact.id}`)
+    } catch (error) {
+        if (error instanceof UploadError || (error instanceof StoreError && error.code !== 'not_found')) {
+            return uploadFailure(c, error.message, error instanceof StoreError && error.code === 'too_large' ? 413 : 400)
+        }
+        throw error
     }
 })
 
