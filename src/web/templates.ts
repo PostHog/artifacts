@@ -4,7 +4,7 @@ import type { HtmlEscapedString } from 'hono/utils/html'
 import type { User } from '../env'
 import type { PublicQuiz, QuestionStats, QuizQuestion } from '../lib/quiz'
 import type { QuizAttempt } from '../quiz-store'
-import { type Artifact, type Comment, type Commenter, type FolderIndex, type FolderSummary, MAX_FOLDER_LENGTH, type Version } from '../store'
+import { type Artifact, type Comment, type Commenter, type FolderIndex, type FolderSummary, MAX_FOLDER_LENGTH, MAX_TITLE_LENGTH, type Version } from '../store'
 import { ROUNDHOG_STYLESHEET, SANDBOX } from './content'
 
 type Html = HtmlEscapedString | Promise<HtmlEscapedString>
@@ -508,6 +508,29 @@ function moveControl(artifact: Artifact, next: string) {
     </details>`
 }
 
+function uploadControl(folder?: string) {
+    return html`<details class="pop" data-close-outside>
+      <summary class="btn"><span>Upload</span></summary>
+      <div class="panel right">
+        <h3>Upload an artifact</h3>
+        <form class="folder-form" method="post" action="/upload" enctype="multipart/form-data">
+          ${folder ? html`<input type="hidden" name="folder" value="${folder}">` : ''}
+          <input class="text" type="file" name="file" accept=".html,.htm,.md,.markdown,.json" required aria-label="File">
+          <input class="text" name="title" maxlength="${MAX_TITLE_LENGTH}" placeholder="Title (defaults to the file name)" aria-label="Title">
+          <select class="text" name="format" aria-label="Format">
+            <option value="">Format: from the file name</option>
+            <option value="html">HTML</option>
+            <option value="slides">Slides (HTML)</option>
+            <option value="markdown">Markdown</option>
+            <option value="quiz">Quiz (JSON)</option>
+          </select>
+          <p class="hint">Up to 5 MB. It starts private${folder ? html` and goes in ${folder}` : ''}. Use Share on its page to change that.</p>
+          <div class="row-actions end"><button class="btn" type="submit"><span>Upload</span></button></div>
+        </form>
+      </div>
+    </details>`
+}
+
 function folderActions(folder: FolderSummary) {
     return html`<div class="row-actions">
     <details class="pop" data-close-outside>
@@ -578,14 +601,14 @@ export function homePage({
     const next = viewHref(view)
     const heading =
         view.kind === 'all'
-            ? html`<h1>Your artifacts</h1>`
+            ? html`<div class="page-head"><h1>Your artifacts</h1>${uploadControl()}</div>`
             : html`<div class="page-head">
     <h1><a class="crumb" href="/">Your artifacts</a> <span class="crumb-sep">/</span> ${view.kind === 'unfiled' ? 'Unfiled' : (current?.name ?? view.name)}</h1>
-    ${current ? folderActions(current) : ''}
+    <div class="row-actions">${uploadControl(current?.name)}${current ? folderActions(current) : ''}</div>
   </div>`
     const empty =
         view.kind === 'all'
-            ? html`Nothing here yet. In Claude Code, try <code>/share-artifact</code>.`
+            ? html`Nothing here yet. Upload a file, or in Claude Code, try <code>/share-artifact</code>.`
             : view.kind === 'unfiled'
               ? 'Every artifact is in a folder.'
               : 'No artifacts are in this folder.'
@@ -595,7 +618,7 @@ export function homePage({
         body: html`${appBar({ user, next: '/', actions: html`<form method="post" action="/logout"><button class="ghost" type="submit">Sign out</button></form>` })}
 <main class="page">
   ${heading}
-  ${view.kind === 'all' ? html`<p class="lede">Everything you've published. Ask Claude to publish or update one, or use <code>/share-artifact</code>.</p>` : ''}
+  ${view.kind === 'all' ? html`<p class="lede">Everything you've published. Upload a file here, or ask Claude to publish or update one.</p>` : ''}
   ${hasFolders
       ? html`<nav class="folders" aria-label="Folders">
     ${folderChip('/', 'All', folders.total, view.kind === 'all')}

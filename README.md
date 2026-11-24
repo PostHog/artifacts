@@ -1,6 +1,6 @@
 # PostHog Artifacts
 
-`artifacts.posthog.com` hosts content made in Claude sessions, such as reports, write-ups and HTML pages, behind unguessable share links. The design is MCP first: agents publish, update, share and delete artifacts through an MCP server. The web UI is a viewer. Its management features are the Share button and the folders on the artifacts page.
+`artifacts.posthog.com` hosts content made in Claude sessions, such as reports, write-ups and HTML pages, behind unguessable share links. The design is MCP first: agents publish, update, share and delete artifacts through an MCP server. The web UI is a viewer. Its management features are the Share button, the folders and the Upload button on the artifacts page.
 
 ## How it works
 
@@ -79,6 +79,10 @@ The owner can file each artifact in one folder. Folders are flat, and an artifac
 - **Lifetime:** a folder exists while it holds at least one artifact, so a move into a new name makes the folder. A rename into the name of another folder merges the two. **Remove folder** moves its artifacts to Unfiled and deletes no artifact.
 - **Order:** a move, a rename or a removal does not change `updated_at`, so the list order stays the same.
 - **Agents:** `publish_artifact` and `update_artifact` take `folder` (`""` moves the artifact out of its folder), `list_artifacts` filters by `folder`, and `list_folders` returns the names with their counts.
+
+### Uploading from the web
+
+The **Upload** button on the artifacts page publishes a file without Claude or the plugin. Pick an `.html`, `.md` or `.json` file (up to 5 MB, UTF-8 text); the format comes from the extension, or choose HTML, Slides, Markdown or Quiz yourself (slides are HTML, so they are never guessed). The title defaults to the file name. The artifact starts private, like any other, and the upload lands you on its page, where Share changes who can see it. Inside a folder view, the upload goes into that folder. Uploads always create a new artifact; to add a version, publish with `artifact_id` through the MCP tools. They share the publish rate limit and are tracked as `artifact published` with `source: web`.
 
 ### Open in Claude Code or Codex
 

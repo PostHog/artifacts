@@ -315,7 +315,7 @@ pre.snippet {
 .error { color: var(--red); font-weight: 600; }
 .stack { display: flex; flex-direction: column; gap: 12px; }
 .row-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-input.text, textarea.text {
+input.text, textarea.text, select.text {
     display: block;
     width: 100%;
     padding: 8px 10px;
@@ -326,7 +326,7 @@ input.text, textarea.text {
     font: inherit;
 }
 input.text::placeholder, textarea.text::placeholder { color: var(--text-muted); }
-input.text:focus, textarea.text:focus { outline: none; border-color: var(--orange); box-shadow: 0 0 0 3px var(--highlight); }
+input.text:focus, textarea.text:focus, select.text:focus { outline: none; border-color: var(--orange); box-shadow: 0 0 0 3px var(--highlight); }
 
 table.list { width: 100%; border-collapse: collapse; }
 table.list td, table.list th { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
