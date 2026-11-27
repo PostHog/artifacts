@@ -526,6 +526,18 @@ await notifications(owner, '1')
 assert.match(await panel(), /Slack notifications are on/)
 step('comments: Slack notifications on by default, owner-only switch')
 
+// The same switch over MCP.
+let viaMcp = await call('update_artifact', { artifact_id: cm.id, comment_notifications: false })
+assert.equal(viaMcp.comment_notifications, false)
+assert.equal(viaMcp.comments_enabled, true, 'leaves comments as they were')
+assert.match(await panel(), /Slack notifications are off/, 'the page shows the MCP change')
+viaMcp = await call('update_artifact', { artifact_id: cm.id, title: viaMcp.title })
+assert.equal(viaMcp.comment_notifications, false, 'an update without the field keeps the setting')
+viaMcp = await call('update_artifact', { artifact_id: cm.id, comment_notifications: true })
+assert.equal(viaMcp.comment_notifications, true)
+assert.match(await panel(), /Slack notifications are on/)
+step('comments: MCP update_artifact turns Slack notifications off and on')
+
 // Staff on a team artifact comment; text is escaped.
 res = await post(other, '<img src=x onerror=alert(1)> first thought')
 assert.equal(res.status, 302)

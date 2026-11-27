@@ -488,9 +488,10 @@ export async function setCommentsEnabled(env: AppEnv, user: User, id: string, en
     return (await getArtifact(env, id))!
 }
 
-export async function setCommentNotifications(env: AppEnv, user: User, id: string, enabled: boolean): Promise<void> {
+export async function setCommentNotifications(env: AppEnv, user: User, id: string, enabled: boolean): Promise<Artifact> {
     await getOwnedArtifact(env, id, user)
     await env.DB.prepare('UPDATE artifacts SET comment_notifications = ? WHERE id = ?').bind(enabled ? 1 : 0, id).run()
+    return (await getArtifact(env, id))!
 }
 
 export async function deleteArtifact(env: AppEnv, user: User, id: string): Promise<void> {
