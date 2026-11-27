@@ -8,7 +8,7 @@ import { isAllowedRedirectUri, isSelfHostedClientId, pageCsp } from '../lib/poli
 import { type Guest, clearGuestCookie, getGuest, getGuestIdentity, guestCookie, normalizeEmail } from '../lib/guest'
 import { LoginError, beginPostHogLogin, clientMetadata, finishPostHogLogin, loginErrorMessage } from '../lib/posthog-oauth'
 import { clearSessionCookie, getUser, isAllowedEmail, isLocal, isRevoked, safeNext, serializeCookie, sessionCookie } from '../lib/session'
-import { type Commenter, StoreError, addComment, cleanAnchor, cleanFolder, deleteComment, getArtifact, getContent, getVersion, isInvited, isOwner, listArtifacts, listComments, listFolders, listInvites, listVersions, removeFolder, renameFolder, setCommentsEnabled, setFolder, setVisibility, shareUrl } from '../store'
+import { type Commenter, StoreError, addComment, cleanAnchor, cleanFolder, deleteComment, getArtifact, getContent, getVersion, isInvited, isOwner, listArtifacts, listComments, listFolders, listInvites, listVersions, removeFolder, renameFolder, setCommentNotifications, setCommentsEnabled, setFolder, setVisibility, shareUrl } from '../store'
 import { type AgentTarget, type FrameAccess, agentContentUrl, contentOrigin, frameUrl, serveAgentContent, serveContent } from './content'
 import { claudeCodeLink, codexLink, handoverPrompt } from './handover'
 import { QuizError, parseAnswers, parseQuiz, publicQuiz, questionStats, scoreQuiz } from '../lib/quiz'
@@ -317,6 +317,41 @@ const COMMENT_ERRORS: Record<string, string> = {
     full: 'This artifact has reached its comment limit.',
     slow: 'Too many comments. Wait a minute and try again.',
     anchor: "Couldn't attach that selection. Clear it and try again.",
+}
+
+/**
+ * Tells project 2 about a new comment, so a destination there can notify the artifact's owner (and skip
+ * their own comments, with is_owner). Never carries the comment, the quoted passage or any part of a guest's address.
+ */
+async function trackComment(c: Context<Env>, artifact: Artifact, who: { me: Commenter; owner: boolean }, isPassage: boolean) {
+    // Whoever the comment was saved as, not whichever session the browser also holds: someone commenting through
+    // the invite list may be signed in as staff with a different address.
+    const guestIdentity = who.me.kind === 'guest' ? await getGuestIdentity(c.env, c.req.raw) : null
+    const isStaff = isAllowedEmail(c.env, who.me.email)
+    const actor: ViewerActor = isStaff
+        ? { kind: 'staff', user: (who.me.kind === 'staff' ? c.get('user') : null) ?? { email: who.me.email, name: who.me.name, distinctId: guestIdentity?.distinctId } }
+        : { kind: 'guest', id: await guestAnalyticsId(c.env, who.me.email) }
+    track(
+        c.env,
+        c.executionCtx,
+        'artifact commented',
+        actor,
+        {
+            artifact_id: artifact.id,
+            artifact_owner: artifact.owner_email,
+            author_name: artifact.owner_name ?? artifact.owner_email,
+            artifact_title: artifact.title,
+            // A guest's display name is made from their email, so only staff are named.
+            commenter_name: isStaff ? who.me.name : null,
+            is_owner: who.owner,
+            // The owner's switch in the comments panel. The destination only sends when this is true.
+            notify_owner: !!artifact.comment_notifications,
+            is_passage: isPassage,
+            version: artifact.latest_version,
+            visibility: artifact.visibility,
+        },
+        c.req.raw
+    )
 }
 
 const wantsJson = (c: Context<Env>) => (c.req.header('Accept') ?? '').includes('application/json')
@@ -740,15 +775,19 @@ app.post('/a/:id/comments', async (c) => {
     const data = await c.req.formData()
     const field = (name: string) => String(data.get(name) ?? '')
     let comments
+    let isPassage = false
     try {
         // The selection comes from the viewer page's own form, filled in from a message the artifact's script sent,
         // so it is untrusted text: cleaned and length-capped here, and only ever rendered escaped.
         const anchor = cleanAnchor({ exact: field('anchor_exact'), prefix: field('anchor_prefix'), suffix: field('anchor_suffix') })
         comments = await addComment(c.env, artifact, who.me, field('body'), anchor)
+        isPassage = !!anchor
     } catch (error) {
         if (!(error instanceof StoreError)) throw error
         return fail(error.message === 'anchor' ? 'anchor' : error.code === 'invalid' ? 'empty' : error.message.includes('limit') && !error.message.includes('characters') ? 'full' : 'long')
     }
+    // The comment is saved by now, so a failure here must not report it as failed (and invite a duplicate).
+    await trackComment(c, artifact, who, isPassage).catch((error) => console.warn('comment tracking failed', String(error)))
     return json ? commentsJson(c, artifact, who, comments) : back()
 })
 
@@ -758,6 +797,19 @@ app.post('/a/:id/comments/settings', async (c) => {
     if (!sameOrigin(c)) return c.text('Forbidden', 403)
     try {
         await setCommentsEnabled(c.env, user, c.req.param('id'), String((await c.req.formData()).get('enabled')) === '1')
+    } catch (error) {
+        if (error instanceof StoreError) return c.text('Not found', 404)
+        throw error
+    }
+    return c.redirect(`/a/${c.req.param('id')}?c=1`)
+})
+
+app.post('/a/:id/comments/notifications', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.text('Sign in required', 401)
+    if (!sameOrigin(c)) return c.text('Forbidden', 403)
+    try {
+        await setCommentNotifications(c.env, user, c.req.param('id'), String((await c.req.formData()).get('enabled')) === '1')
     } catch (error) {
         if (error instanceof StoreError) return c.text('Not found', 404)
         throw error

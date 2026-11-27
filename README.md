@@ -67,7 +67,8 @@ The owner can turn comments on for an artifact (off by default, so nothing alrea
 - **Posting:** the viewer posts and deletes with `fetch` and replaces the thread in place, so the page and the artifact do not reload. ⌘ Enter (Ctrl+Enter elsewhere) posts. Without JavaScript, the forms post and reload the page as before.
 - **Limits:** plain text only, 2000 characters, 500 comments per artifact, 10 posts a minute per person. Each comment records which version was latest when it was written.
 - **On a passage:** select text in the artifact and a **Comment** button appears next to the selection. Pressing it opens the panel with the passage quoted above the box. Commented passages are highlighted in the artifact; clicking one jumps to its comment, and clicking a comment's quote scrolls the passage into view (and switches slide, in a deck). Works for HTML, Markdown and slides, on the latest version while comments are on. Passages are stored as the quoted text plus up to 64 characters either side, not a DOM position, so when the author publishes a new version a comment whose text has gone shows "Can't find this text in this version" instead of pointing at the wrong place. Highlighting uses the CSS Custom Highlight API, so a browser without it still gets the button, quotes and comments but no highlight.
-- **Not included:** replies, edits and notifications. Claude can read comments, with the quoted text as `on_text`, using `list_comments`.
+- **Notifications:** each saved comment sends `artifact commented` to project 2 (see [Usage analytics](#usage-analytics)). The app sends no messages itself: a PostHog destination on that event tells the owner, routed on `artifact_owner`, sending only when `notify_owner` is true and `is_owner` is false. The owner can turn Slack notifications off (or back on) per artifact in the Comments panel, or with `comment_notifications` on `update_artifact` (so asking an agent to "disable notifications" works). They are on by default.
+- **Not included:** replies and edits. Claude can read comments, with the quoted text as `on_text`, using `list_comments`.
 
 ### Folders
 
@@ -104,7 +105,7 @@ Each fills in a prompt without sending it. The prompt names the artifact and its
 | `list_folders` | Your folders with their artifact counts, and the count of unfiled artifacts. |
 | `get_artifact` | Metadata, version history, and optionally a version's content. |
 | `set_visibility` | `private`, `team`, `invited` (with `invited_emails`, which replaces the list) or `public`. |
-| `update_artifact` | Rename, change the description, move to a folder (`folder`), or turn comments on or off (`comments_enabled`). |
+| `update_artifact` | Rename, change the description, move to a folder (`folder`), turn comments on or off (`comments_enabled`), or turn Slack notifications about new comments on or off (`comment_notifications`). |
 | `brand_artifact` | Make an artifact you own follow the [PostHog brandbook](https://brand.posthog.com/llms.txt): adds the RoundHog typeface and brand colour variables to the latest HTML or slides version (as a new version) and returns the palette, logo and illustration guidelines for the agent to finish with. |
 | `list_comments` | Comments on an artifact you own: author, email, staff or guest, version, text. |
 | `delete_artifact` | Permanent delete. |
@@ -179,6 +180,7 @@ Server-side events go to [project 2](https://us.posthog.com/project/2) via `post
 | `artifact viewed` | viewer page loads, once access is granted | `artifact_id`, `artifact_owner`, `author_name`, `artifact_title`, `is_owner`, `version`, `access`, `viewer_type` |
 | `artifact sent to agent` | an agent downloads a handover link | `artifact_id`, `version`, `format`, `access`, `target` (`claude_code`, `codex`, `copy`) |
 | `$mcp_tool_call` | every MCP tool call, via [MCP Analytics](https://posthog.com/docs/mcp-analytics/installation/typescript) (`@posthog/mcp`) | `$mcp_tool_name`, `$mcp_is_error`, `$mcp_duration_ms`, `$mcp_intent` |
+| `artifact commented` | a comment is saved | `artifact_id`, `artifact_owner`, `author_name`, `artifact_title`, `commenter_name` (staff only), `is_owner`, `notify_owner`, `is_passage`, `version`, `visibility` |
 | `artifacts mcp client connected` | MCP OAuth completes | `client_id`, `is_consent_remembered` |
 | `artifacts user signed in` | web sign-in | |
 

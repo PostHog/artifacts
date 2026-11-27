@@ -27,7 +27,7 @@ import {
     listInvites,
     listVersions,
     publish,
-    setCommentsEnabled,
+    setCommentNotifications, setCommentsEnabled,
     setFolder,
     setVisibility,
     shareUrl,
@@ -63,6 +63,7 @@ function describe(env: AppEnv, artifact: Artifact) {
         visibility: artifact.visibility,
         latest_version: artifact.latest_version,
         comments_enabled: !!artifact.comments_enabled,
+        comment_notifications: !!artifact.comment_notifications,
         folder: artifact.folder,
         created_at: new Date(artifact.created_at).toISOString(),
         updated_at: new Date(artifact.updated_at).toISOString(),
@@ -328,20 +329,25 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
         {
             title: 'Rename artifact',
             description:
-                "Change an artifact's title or description without publishing a new version, move it to a folder, or turn comments on or off. Moving it does not change updated_at. Comments are visible to everyone who can open the artifact and is signed in (PostHog staff, and invited people), never to anonymous link viewers.",
+                "Change an artifact's title or description without publishing a new version, move it to a folder, turn comments on or off, or turn Slack notifications about new comments on or off. Moving it does not change updated_at. Comments are visible to everyone who can open the artifact and is signed in (PostHog staff, and invited people), never to anonymous link viewers. When the user asks to enable or disable notifications for an artifact, set comment_notifications. It does not turn comments on or off.",
             inputSchema: z.object({
                 artifact_id: artifactId,
                 title: z.string().min(1).max(200).optional(),
                 description: z.string().max(1000).optional(),
                 comments_enabled: z.boolean().optional().describe('Turn comments on or off for this artifact'),
+                comment_notifications: z
+                    .boolean()
+                    .optional()
+                    .describe('Enable (true) or disable (false) Slack notifications to you about new comments from other people on this artifact. On by default. It only has an effect while comments are on.'),
                 folder: folder.optional(),
             }),
             annotations: { idempotentHint: true },
         },
-        guarded(async ({ artifact_id, title, description, comments_enabled, folder }) => {
+        guarded(async ({ artifact_id, title, description, comments_enabled, comment_notifications, folder }) => {
             const touchesDetails = title !== undefined || description !== undefined || folder === undefined
             let artifact = touchesDetails ? await updateMetadata(env, user, artifact_id, { title, description }) : await getOwnedArtifact(env, artifact_id, user)
             if (comments_enabled !== undefined) artifact = await setCommentsEnabled(env, user, artifact_id, comments_enabled)
+            if (comment_notifications !== undefined) artifact = await setCommentNotifications(env, user, artifact_id, comment_notifications)
             if (folder !== undefined) artifact = await setFolder(env, user, artifact_id, folder)
             track(env, ctx, 'artifact details updated', user, {
                 artifact_id,
@@ -349,6 +355,7 @@ export function buildServer(env: AppEnv, user: User, ctx: Pick<ExecutionContext,
                 is_description_changed: description !== undefined,
                 is_folder_changed: folder !== undefined,
                 comments_enabled,
+                comment_notifications,
                 source: 'mcp',
             })
             return describe(env, artifact)

@@ -13,6 +13,7 @@ export type AnalyticsEvent =
     | 'artifact viewed'
     | 'artifact sent to agent'
     | 'quiz submitted'
+    | 'artifact commented'
     | 'artifacts mcp client connected'
     | 'artifacts user signed in'
 

@@ -148,6 +148,16 @@ export async function commentItemsHtml(artifact: Artifact, view: Pick<CommentsVi
     return (await html`${commentItems(artifact, view)}`).toString()
 }
 
+/** The owner's switch for Slack messages about new comments. A plain form, like the comments on/off one. */
+function notificationSettings(artifact: Artifact) {
+    const on = !!artifact.comment_notifications
+    return html`<form method="post" action="/a/${artifact.id}/comments/notifications" class="comment-settings">
+    <input type="hidden" name="enabled" value="${on ? '0' : '1'}">
+    <p class="hint">Slack notifications are ${on ? 'on' : 'off'} for new comments from other people.</p>
+    <button class="btn secondary" type="submit"><span>${on ? 'Turn Slack notifications off' : 'Turn Slack notifications on'}</span></button>
+  </form>`
+}
+
 function commentsPanel(artifact: Artifact, { enabled, items, me, owner, open, error }: CommentsView) {
     return html`<details class="pop" data-close-outside data-comments data-can-comment="${me ? '1' : '0'}" ${open ? 'open' : ''}>
     <summary class="btn secondary"><span data-comment-count>Comments${enabled ? ` (${items.length})` : ''}</span></summary>
@@ -160,6 +170,7 @@ function commentsPanel(artifact: Artifact, { enabled, items, me, owner, open, er
         <button class="btn secondary" type="submit"><span>${enabled ? 'Turn comments off' : 'Turn comments on'}</span></button>
       </form>`
           : ''}
+      ${owner && enabled ? notificationSettings(artifact) : ''}
       ${enabled
           ? html`<p class="error small" data-comment-error ${error ? '' : 'hidden'}>${error ?? ''}</p>
       <ul class="comment-list" data-comment-list>
