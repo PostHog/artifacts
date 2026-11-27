@@ -15,6 +15,8 @@ export interface Artifact {
     latest_version: number
     /** 1 when the owner has turned comments on. */
     comments_enabled: number
+    /** 1 unless the owner has turned off Slack notifications about new comments. */
+    comment_notifications: number
     folder: string | null
     created_at: number
     updated_at: number
@@ -484,6 +486,11 @@ export async function setCommentsEnabled(env: AppEnv, user: User, id: string, en
     await getOwnedArtifact(env, id, user)
     await env.DB.prepare('UPDATE artifacts SET comments_enabled = ? WHERE id = ?').bind(enabled ? 1 : 0, id).run()
     return (await getArtifact(env, id))!
+}
+
+export async function setCommentNotifications(env: AppEnv, user: User, id: string, enabled: boolean): Promise<void> {
+    await getOwnedArtifact(env, id, user)
+    await env.DB.prepare('UPDATE artifacts SET comment_notifications = ? WHERE id = ?').bind(enabled ? 1 : 0, id).run()
 }
 
 export async function deleteArtifact(env: AppEnv, user: User, id: string): Promise<void> {

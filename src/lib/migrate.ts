@@ -6,6 +6,7 @@ import slidesFormat from '../../migrations/0005_slides_format.sql'
 import commentAnchors from '../../migrations/0006_comment_anchors.sql'
 import quiz from '../../migrations/0007_quiz.sql'
 import folders from '../../migrations/0008_folders.sql'
+import commentNotifications from '../../migrations/0009_comment_notifications.sql'
 
 /**
  * Schema migrations, applied by the Worker on first use in each isolate. Deploys are a plain
@@ -22,6 +23,7 @@ const MIGRATIONS: [name: string, sql: string][] = [
     ['0006_comment_anchors', commentAnchors],
     ['0007_quiz', quiz],
     ['0008_folders', folders],
+    ['0009_comment_notifications', commentNotifications],
 ]
 
 function statements(sql: string): string[] {
