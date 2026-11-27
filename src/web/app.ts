@@ -324,8 +324,13 @@ const COMMENT_ERRORS: Record<string, string> = {
  * their own comments, with is_owner). Never carries the comment, the quoted passage or any part of a guest's address.
  */
 async function trackComment(c: Context<Env>, artifact: Artifact, who: { me: Commenter; owner: boolean }, isPassage: boolean) {
+    // Whoever the comment was saved as, not whichever session the browser also holds: someone commenting through
+    // the invite list may be signed in as staff with a different address.
     const guestIdentity = who.me.kind === 'guest' ? await getGuestIdentity(c.env, c.req.raw) : null
-    const actor = await viewerActor(c, { guestIdentity }, false)
+    const isStaff = isAllowedEmail(c.env, who.me.email)
+    const actor: ViewerActor = isStaff
+        ? { kind: 'staff', user: (who.me.kind === 'staff' ? c.get('user') : null) ?? { email: who.me.email, name: who.me.name, distinctId: guestIdentity?.distinctId } }
+        : { kind: 'guest', id: await guestAnalyticsId(c.env, who.me.email) }
     track(
         c.env,
         c.executionCtx,
@@ -337,7 +342,7 @@ async function trackComment(c: Context<Env>, artifact: Artifact, who: { me: Comm
             author_name: artifact.owner_name ?? artifact.owner_email,
             artifact_title: artifact.title,
             // A guest's display name is made from their email, so only staff are named.
-            commenter_name: actor.kind === 'staff' ? who.me.name : null,
+            commenter_name: isStaff ? who.me.name : null,
             is_owner: who.owner,
             // The owner's switch in the comments panel. The destination only sends when this is true.
             notify_owner: !!artifact.comment_notifications,
@@ -406,7 +411,7 @@ async function viewAccess(c: Context<Env>, id: string): Promise<ViewAccess> {
  * PostHog ID. Customers are counted by a hash of their verified email, signed-out viewers of public links by a
  * long-lived anonymous cookie (set here when `setCookie`), so unique viewers can be counted.
  */
-async function viewerActor(c: Context<Env>, view: Pick<Extract<ViewAccess, { ok: true }>, 'guestIdentity'>, setCookie: boolean): Promise<ViewerActor> {
+async function viewerActor(c: Context<Env>, view: Extract<ViewAccess, { ok: true }>, setCookie: boolean): Promise<ViewerActor> {
     const user = c.get('user')
     if (user) return { kind: 'staff', user }
     const { guestIdentity } = view
@@ -781,7 +786,8 @@ app.post('/a/:id/comments', async (c) => {
         if (!(error instanceof StoreError)) throw error
         return fail(error.message === 'anchor' ? 'anchor' : error.code === 'invalid' ? 'empty' : error.message.includes('limit') && !error.message.includes('characters') ? 'full' : 'long')
     }
-    await trackComment(c, artifact, who, isPassage)
+    // The comment is saved by now, so a failure here must not report it as failed (and invite a duplicate).
+    await trackComment(c, artifact, who, isPassage).catch((error) => console.warn('comment tracking failed', String(error)))
     return json ? commentsJson(c, artifact, who, comments) : back()
 })
 
